@@ -1,0 +1,23 @@
+[package]
+name = "sheet-nesting-estimator"
+version = "1.0.0"
+description = "Sheet Nesting Estimator"
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+base64 = "0.22"
+
+# A personal offline tool: optimise the installed binary for size, not for
+# incremental rebuild speed.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

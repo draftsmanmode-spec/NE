@@ -1,0 +1,12 @@
+# Rust build output
+/src-tauri/target/
+
+# Tauri-generated ACL schemas, rewritten on every build
+/src-tauri/gen/
+
+# Staging copy of the frontend; build.ps1 recreates it from the source files
+/dist/
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc
