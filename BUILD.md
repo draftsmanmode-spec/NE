@@ -16,7 +16,7 @@ src-tauri/
   src/main.rs              ~8 lines: open a window, load the page
   capabilities/default.json
   icons/                   generated purple->pink "N" mark
-tools/                     icon and font generators (see below)
+tools/                     icon and font generators, plus test_openings.mjs (browser test)
 ```
 
 ## Prerequisites (one time)
