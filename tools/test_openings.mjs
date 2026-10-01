@@ -68,7 +68,7 @@ await page.evaluate(() => { dxfOpenModal(); });
 await page.setInputFiles('#dxfFileInput', paths);
 await page.waitForFunction(() => dxfReviewRows.length >= 4);
 
-const rows = await page.evaluate(() => dxfReviewRows.map(r => ({ name: r.name, w: r.w, h: r.h, qty: r.qty, openings: r.openings, skipped: r.skippedHoles })));
+const rows = await page.evaluate(() => dxfReviewRows.map(r => ({ name: r.name, w: r.w, h: r.h, qty: r.qty, openings: r.openings, skipped: r.skippedHoles, cut: r.cut })));
 const byName = Object.fromEntries(rows.map(r => [r.name, r]));
 console.log(JSON.stringify(rows, null, 1));
 
@@ -91,6 +91,9 @@ if (ring){
 }
 check(byName['Plate'] && byName['Plate'].openings.length === 0 && byName['Plate'].skipped === 1, 'hole with a shape already inside it is left alone');
 check(byName['Bracket'] && byName['Bracket'].openings.length === 0, 'bolt holes below the minimum size are ignored');
+check(fr && Math.abs(fr.cut.length - 184) < 0.01 && fr.cut.pierces === 2, `frame cut path 100 + 84 = 184 in, 2 pierces (got ${fr && fr.cut.length} in, ${fr && fr.cut.pierces})`);
+check(ring && Math.abs(ring.cut.length - 2 * Math.PI * 18) < 0.5 && ring.cut.pierces === 2, `ring cut path ~113.1 in, 2 pierces (got ${ring && ring.cut.length})`);
+check(byName['Bracket'] && byName['Bracket'].cut.pierces === 3, 'bracket: outline + 2 bolt holes = 3 pierces (small holes still cost a pierce)');
 if (shotDir) await page.screenshot({ path: path.join(shotDir, 'openings-review.png') });
 
 await page.click('#dxfAddBtn');
@@ -461,6 +464,43 @@ fs.writeFileSync(lineFrame, header + rectLines(0, 0, 24, 24) + circle(12, 12, 9)
 const lineRows = await importRows([lineFrame], true);
 check(lineRows.length === 1 && lineRows[0].w === 24 && lineRows[0].openings >= 1, `LINE-drawn outline with a round hole stays one part with its opening (${lineRows.length} row, ${lineRows[0] && lineRows[0].openings} openings)`);
 await page.evaluate(() => document.getElementById('dxfModal').classList.remove('open'));
+
+// ---- cut path in the report ---------------------------------------------
+const cutRes = await page.evaluate(() => {
+  parts = [{ id: nextId(), name: 'Typed frame', width: 30, height: 20, qty: 2, rotate: true, color: null },
+           { id: nextId(), name: 'Tab', width: 6, height: 5, qty: 10, rotate: true, color: null }];
+  setPartOpenings(parts[0], [frameOpening(30, 20, 2)]);
+  sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
+  document.getElementById('fillOpenings').checked = true;
+  document.getElementById('partGap').value = '0.25'; document.getElementById('borderGap').value = '0.5';
+  ['cutSpeed', 'pierceSec', 'laserRate'].forEach(id => document.getElementById(id).value = '');
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const est = partCut(parts[0]);
+  const noRates = (document.getElementById('cutNote') || {}).textContent || '';
+  const noStat = !/Est\. cutting/.test(document.getElementById('reportBody').textContent);
+  // 2 x 184 + 10 x 22 = 588 in; 2 x 2 + 10 = 14 pierces
+  document.getElementById('cutSpeed').value = '200';
+  document.getElementById('pierceSec').value = '1';
+  document.getElementById('laserRate').value = '120';
+  document.getElementById('laserRate').dispatchEvent(new Event('input'));
+  const t = cutTotals(strategyResults[selectedStrategyKey].bins);
+  const withRates = (document.getElementById('cutNote') || {}).textContent || '';
+  const stat = /Est\. cutting/.test(document.getElementById('reportBody').textContent);
+  loadProjectIntoWorking(currentProjectId);
+  const kept = document.getElementById('cutSpeed').value === '200' && document.getElementById('laserRate').value === '120';
+  // A resized DXF part falls back to the estimate.
+  const dxfPart = { width: 30, height: 20, cut: { length: 250, pierces: 5, w: 30, h: 20 } };
+  const real = partCut(dxfPart).length === 250, resized = partCut(Object.assign({}, dxfPart, { width: 31 })).estimated;
+  return { est, noRates, noStat, t, withRates, stat, kept, real, resized };
+});
+console.log(JSON.stringify({ t: cutRes.t, withRates: cutRes.withRates }));
+check(cutRes.est.length === 184 && cutRes.est.pierces === 2 && cutRes.est.estimated, 'typed-in frame: cut estimated from rectangle + opening (184 in, 2 pierces)');
+check(/Cut path 588 in \(49\.0 ft\), 14 pierces/.test(cutRes.noRates) && cutRes.noStat, 'report totals cut path and pierces of the nested parts; no cost without rates');
+// 588/200 = 2.94 min + 14 s = 3.173 min -> $6.35 at $120/h
+check(Math.abs(cutRes.t.minutes - 3.1733) < 0.001 && Math.abs(cutRes.t.cost - 6.35) < 0.01 && /3\.2 min of machine time = \$6\.35/.test(cutRes.withRates) && cutRes.stat,
+  `with rates: machine time and cutting cost (${cutRes.t.minutes && cutRes.t.minutes.toFixed(2)} min, $${cutRes.t.cost && cutRes.t.cost.toFixed(2)})`);
+check(cutRes.kept, 'laser rates are saved with the project');
+check(cutRes.real && cutRes.resized, 'DXF cut path is used as read, and falls back to the estimate after a resize');
 
 // The PDF path draws the same sheets through drawSheet(); make sure it still builds.
 const pdfBytes = await page.evaluate(async () => {

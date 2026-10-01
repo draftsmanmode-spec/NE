@@ -16,6 +16,7 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - `PACKING ALGORITHM` (MaxRects: `packSheetsOnce`, `packSheetsBest`, `packMoreAttempts`)
 - `RIGHTSIZE PASS`, `COMMON-LINE`, `REMNANT CAPTURE`, `STRATEGY COMPARISON`
 - Drawing: `drawSheet`, `drawSheetThumb`, `rotatedBinView`; PDF: `buildNestingPdf`
+- Split mode: `dxfSplitNested` (containment) with `dxfClusterRuns` (bbox) as fallback; cut path: `dxfCutStats`, `partCut`, `cutTotals`
 
 ## Rules that matter
 - Nesting is **bounding-box (rectangles) only**, by design. Openings are offered as

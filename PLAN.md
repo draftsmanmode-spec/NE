@@ -46,7 +46,14 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Identical shapes in one file collapse to one row with the count as Qty (review modal says which)
 - [x] Tests: layout DXF, LINE-drawn frame, open outline fallback (50 checks)
 
+## Done — Cut path and laser cost (2026-10-01)
+- [x] DXF parts carry their real cut path (entity lengths) and pierces (one per closed loop / open chain)
+- [x] Typed-in parts: estimate from rectangle + openings (flagged as estimated in the report); a resized DXF part falls back to the estimate
+- [x] Report + PDF: cut path and pierces of the nested parts; with cut speed / pierce time / $ per hour (Nesting settings, saved per project) also machine time and an "Est. cutting" stat
+- [x] Tests: frame/ring/bracket cut paths, typed estimate, totals, time and $, persistence (58 checks)
+
 ## Next candidates
-- [ ] Cut length and pierce count per part from the DXF (loop perimeters, one pierce per closed loop) -> laser time / $ estimate in the report
+- [ ] Decide whether "Customer quote" should include cutting cost (today: material x markup only)
+- [ ] Common-line cuts could subtract shared edges from the cut path
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants
 - [ ] Identical shapes drawn rotated 90 deg in one file are not merged yet (only same orientation)

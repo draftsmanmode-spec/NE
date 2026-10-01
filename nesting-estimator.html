@@ -721,6 +721,21 @@
               <label class="small">Markup for customer quote (%)<span class="hint" tabindex="0">?<span class="hint-bubble">Optional. If you fill in $/sheet costs, this turns your raw material cost into a sell price — e.g. 35% markup on $100 of material quotes at $135. Leave blank to just see your own cost.</span></span></label>
               <input type="number" id="markupPct" step="1" min="0" placeholder="e.g. 35">
             </div>
+            <div class="checkline" style="margin-top:4px;">
+              <label class="small" style="margin:0;"><b>Laser cutting</b> (optional)<span class="hint" tabindex="0">?<span class="hint-bubble">The report always totals the cut path (inches of cut) and pierces of the parts actually nested &mdash; real cut paths for DXF parts, a rectangle-plus-openings estimate for typed-in parts. Fill in your cut speed (and pierce time and hourly rate) to also see machine time and cutting cost.</span></span></label>
+            </div>
+            <div>
+              <label class="small">Cut speed (in/min)</label>
+              <input type="number" id="cutSpeed" step="1" min="0" placeholder="e.g. 200">
+            </div>
+            <div>
+              <label class="small">Pierce time (sec)</label>
+              <input type="number" id="pierceSec" step="0.1" min="0" placeholder="e.g. 1">
+            </div>
+            <div>
+              <label class="small">Machine rate ($/hr)</label>
+              <input type="number" id="laserRate" step="1" min="0" placeholder="e.g. 120">
+            </div>
             <div class="quality-row">
               <label class="small">Nesting quality<span class="hint" tabindex="0">?<span class="hint-bubble">How hard the app searches for a tight layout. <b>Fast</b> = one quick pass. <b>Balanced</b> = tries 12 arrangements. <b>Quality</b> = tries 28 and keeps the best. Higher settings pack tighter but take a bit longer — usually still under a second.</span></span></label>
               <div class="quality-track">
@@ -903,7 +918,7 @@ function sampleData(){
   };
 }
 function defaultSettings(){
-  return { partGap:0.25, borderGap:0.5, defaultRotate:true, fillOpenings:true, quality:2, markupPct:'' };
+  return { partGap:0.25, borderGap:0.5, defaultRotate:true, fillOpenings:true, quality:2, markupPct:'', cutSpeed:'', pierceSec:'', laserRate:'' };
 }
 
 function getProject(id){ return projects.find(p=>p.id===id); }
@@ -936,7 +951,10 @@ function saveWorkingIntoCurrentProject(){
     defaultRotate: document.getElementById('defaultRotate').checked,
     fillOpenings: document.getElementById('fillOpenings').checked,
     quality: qualitySlider.value,
-    markupPct: document.getElementById('markupPct').value
+    markupPct: document.getElementById('markupPct').value,
+    cutSpeed: document.getElementById('cutSpeed').value,
+    pierceSec: document.getElementById('pierceSec').value,
+    laserRate: document.getElementById('laserRate').value
   };
   persistAll();
 }
@@ -953,6 +971,7 @@ function loadProjectIntoWorking(id){
   document.getElementById('defaultRotate').checked = !!s.defaultRotate;
   document.getElementById('fillOpenings').checked = s.fillOpenings !== false;
   document.getElementById('markupPct').value = s.markupPct;
+  ['cutSpeed','pierceSec','laserRate'].forEach(id => { document.getElementById(id).value = s[id] != null ? s[id] : ''; });
   qualitySlider.value = s.quality;
   updateQualityNote();
   currentProjectId = id;
@@ -1280,10 +1299,10 @@ document.getElementById('partGap').addEventListener('input', saveWorkingIntoCurr
 document.getElementById('borderGap').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('defaultRotate').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('fillOpenings').addEventListener('input', saveWorkingIntoCurrentProject);
-document.getElementById('markupPct').addEventListener('input', ()=>{
+['markupPct','cutSpeed','pierceSec','laserRate'].forEach(id=> document.getElementById(id).addEventListener('input', ()=>{
   saveWorkingIntoCurrentProject();
   if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
-});
+}));
 document.getElementById('projectNotes').addEventListener('input', saveWorkingIntoCurrentProject);
 
 /* =====================================================================
@@ -2087,6 +2106,71 @@ function partOpenings(p){
   return p.openings.filter(o => o.x >= -1e-9 && o.y >= -1e-9 && o.x+o.w <= p.width+1e-9 && o.y+o.h <= p.height+1e-9
     && o.w < p.width - 1e-9 && o.h < p.height - 1e-9);
 }
+/* ---- cut path ----
+   Laser time is driven by inches of cut and number of pierces, not sheet
+   area. A DXF part carries its real cut path (every entity's length; one
+   pierce per closed loop or open chain); a typed-in part gets its
+   rectangle plus its openings. Like openings, a DXF cut path only holds
+   for the size it was read at. */
+function dxfCutStats(runs){
+  let length = 0;
+  runs.forEach(r => { for (let i = 1; i < r.pts.length; i++) length += Math.hypot(r.pts[i][0]-r.pts[i-1][0], r.pts[i][1]-r.pts[i-1][1]); });
+  const st = dxfStitch(runs, DXF_LOOP_TOL);
+  return { length: +length.toFixed(2), pierces: st.loops.length + st.open.length };
+}
+function partCut(p){
+  const c = p.cut;
+  if (c && Math.abs(c.w - p.width) < 1e-6 && Math.abs(c.h - p.height) < 1e-6) return { length: c.length, pierces: c.pierces, estimated: false };
+  // Holes are cut whether or not anything is nested in them.
+  const os = partOpenings(Object.assign({}, p, { useOpenings: true }));
+  return { length: 2*(p.width + p.height) + os.reduce((a, o) => a + 2*(o.w + o.h), 0), pierces: 1 + os.length, estimated: true };
+}
+function laserSettings(){
+  const speed = parseFloat(document.getElementById('cutSpeed').value);
+  if (!(speed > 0)) return null;
+  const pierceSec = Math.max(0, parseFloat(document.getElementById('pierceSec').value) || 0);
+  const rate = parseFloat(document.getElementById('laserRate').value);
+  return { speed, pierceSec, rate: rate > 0 ? rate : null };
+}
+// Totals for the parts actually placed on these sheets.
+function cutTotals(bins){
+  const t = { length: 0, pierces: 0, parts: 0, estimated: 0, minutes: null, cost: null };
+  const byDef = new Map();
+  bins.forEach(b => b.placements.forEach(pl => {
+    let c = byDef.get(pl.defId);
+    if (!c){
+      const def = parts.find(x => x.id === pl.defId);
+      c = def ? partCut(def) : { length: 2*(pl.w + pl.h), pierces: 1, estimated: true };
+      byDef.set(pl.defId, c);
+    }
+    t.length += c.length; t.pierces += c.pierces; t.parts++;
+    if (c.estimated) t.estimated++;
+  }));
+  const ls = laserSettings();
+  if (ls && t.parts){
+    t.minutes = t.length / ls.speed + t.pierces * ls.pierceSec / 60;
+    if (ls.rate != null) t.cost = t.minutes / 60 * ls.rate;
+  }
+  return t;
+}
+function fmtMinutes(m){
+  if (m < 60) return m.toFixed(1) + ' min';
+  const h = Math.floor(m / 60);
+  return h + ' h ' + Math.round(m - h*60) + ' min';
+}
+function cutSummaryText(t){
+  if (!t.parts) return '';
+  let txt = 'Cut path ' + Math.round(t.length).toLocaleString('en-US') + ' in (' + (t.length/12).toFixed(1) + ' ft), '
+    + t.pierces + ' pierce' + (t.pierces === 1 ? '' : 's');
+  if (t.minutes != null) txt += ' - about ' + fmtMinutes(t.minutes) + ' of machine time' + (t.cost != null ? ' = $' + t.cost.toFixed(2) : '');
+  if (t.estimated) txt += '. ' + t.estimated + ' of ' + t.parts + ' parts estimated from their rectangle and openings (no DXF cut path)';
+  return txt + '.';
+}
+function sanitizeCut(c){
+  if (!c) return undefined;
+  const v = { length: Number(c.length), pierces: Math.round(Number(c.pierces)), w: Number(c.w), h: Number(c.h) };
+  return (v.length > 0 && v.pierces >= 1 && isValidDims(v.w, v.h)) ? v : undefined;
+}
 function sanitizeOpenings(list){
   if (!Array.isArray(list)) return undefined;
   return list
@@ -2214,7 +2298,7 @@ function dxfReadFile(file){
         const key = w.toFixed(3) + 'x' + h.toFixed(3) + '|' + found.openings.map(o => [o.x, o.y, o.w, o.h].map(v => v.toFixed(2)).join(',')).join(';');
         const same = byKey.get(key);
         if (same){ same.count++; same.skippedHoles += found.skippedHoles; return; }
-        const shape = { w, h, found, count: 1, skippedHoles: found.skippedHoles };
+        const shape = { w, h, found, count: 1, skippedHoles: found.skippedHoles, cut: dxfCutStats(cl.runs) };
         byKey.set(key, shape); shapes.push(shape);
       });
       shapes.forEach((sh, i) => {
@@ -2225,7 +2309,7 @@ function dxfReadFile(file){
           name: guess.name, w: sh.w, h: sh.h,
           qty: guess.qty * sh.count, source: file.name, merged: sh.count,
           openings: sh.found.openings, useOpenings: sh.found.openings.length > 0,
-          openBase: { w: sh.w, h: sh.h }, skippedHoles: sh.skippedHoles
+          openBase: { w: sh.w, h: sh.h }, skippedHoles: sh.skippedHoles, cut: sh.cut
         });
       });
       renderDxfReviewTable();
@@ -2313,6 +2397,7 @@ document.getElementById('dxfAddBtn').addEventListener('click', ()=>{
   const rot = document.getElementById('defaultRotate').checked;
   valid.forEach(r => {
     const part = { id: nextId(), name: r.name || ('Part '+(parts.length+1)), width: r.w, height: r.h, qty: r.qty, rotate: rot, color: null };
+    if (r.cut) part.cut = { length: r.cut.length, pierces: r.cut.pierces, w: r.openBase.w, h: r.openBase.h };
     if (r.openings && r.openings.length){
       part.openings = r.openings;
       part.useOpenings = r.useOpenings !== false;
@@ -3366,6 +3451,7 @@ function renderReportBody(partGap, borderGap, quality){
   const commonLines = detectCommonLines(bins, partGap);
   const remnants = findRemnants(bins, 6);
   const nestedInOpenings = countNestedInOpenings(bins);
+  const cut = cutTotals(bins);
 
   const byType = {};
   sheetTypes.forEach(st=> byType[st.id] = { st, sheets:0, area:0, used:0 });
@@ -3397,6 +3483,7 @@ function renderReportBody(partGap, borderGap, quality){
   const markupPct = parseFloat(document.getElementById('markupPct').value);
   const hasMarkup = s.costKnown && markupPct > 0;
   if (hasMarkup) html += statBlock('$'+(s.cost*(1+markupPct/100)).toFixed(2), `Customer quote (+${markupPct}%)`, 'green');
+  if (cut.cost != null) html += statBlock('$'+cut.cost.toFixed(2), 'Est. cutting', 'purple');
   html += '</div>';
 
   // Efficiency benchmark context — a bare % means little on its own.
@@ -3417,6 +3504,8 @@ function renderReportBody(partGap, borderGap, quality){
   }
 
   html += `<div class="gap-note">Strategy: <span>${escHtml(strategyResults[selectedStrategyKey].label)}</span> &nbsp;&middot;&nbsp; Part gap: <span>${partGap}"</span> &nbsp;&middot;&nbsp; Border gap: <span>${borderGap}"</span> &nbsp;&middot;&nbsp; Quality pass: <span>${['Fast','Balanced','Quality'][quality]}</span></div>`;
+  const cutText = cutSummaryText(cut);
+  if (cutText) html += `<div class="gap-note" id="cutNote" style="margin-top:-16px;">&#9986; <span>${escHtml(cutText)}</span></div>`;
   const savingText = openingsSavingText(s, nestedInOpenings);
   if (savingText){
     html += `<div class="gap-note" id="openingsNote" style="margin-top:-16px;">&#9635; <span>${escHtml(savingText)}</span></div>`;
@@ -4281,6 +4370,8 @@ async function buildNestingPdf(mode){
     { num: s.unplaced.length, lbl: 'Parts unplaced', bad: s.unplaced.length > 0 },
   ];
   if (s.costKnown) stats.push({ num: '$' + s.cost.toFixed(2), lbl: 'Est. cost' });
+  const cut = cutTotals(bins);
+  if (cut.cost != null) stats.push({ num: '$' + cut.cost.toFixed(2), lbl: 'Est. cutting' });
   pdfStatStrip(doc, ctx, stats);
 
   const usage = {};
@@ -4297,6 +4388,8 @@ async function buildNestingPdf(mode){
 
   const savingText = openingsSavingText(s, countNestedInOpenings(bins));
   if (savingText) pdfParagraph(doc, ctx, savingText + ' Openings are drawn dashed.', PDF_TYPE.note, PDF_MUTED);
+  const cutText = cutSummaryText(cut);
+  if (cutText) pdfParagraph(doc, ctx, cutText, PDF_TYPE.note, PDF_MUTED);
 
   if (s.unplaced.length){
     const grouped = {};
@@ -4685,7 +4778,7 @@ function sanitizeImportedPart(p, idx){
     name: (p.name!=null && String(p.name).trim()!=='') ? p.name : ('Part ' + (idx+1)),
     qty: Math.max(0, parseInt(p.qty)||0),
     rotate: p.rotate!=null ? !!p.rotate : true,
-  }, importedOpenings(p));
+  }, importedOpenings(p), { cut: sanitizeCut(p.cut) });
 }
 /* Openings only come in with the size they were measured at; without it
    they could never be flagged stale, so they're dropped. */
