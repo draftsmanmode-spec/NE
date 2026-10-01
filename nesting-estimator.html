@@ -203,10 +203,18 @@
   .col-w, .col-h, .col-q{ width:64px; }
   .col-swatch{ width:30px; }
   .col-del{ width:28px; }
-  .col-fill{ width:44px; text-align:center; }
+  .col-fill{ width:44px; text-align:center; white-space:nowrap; }
   .fill-tog{ display:inline-flex; align-items:center; gap:3px; font-family:var(--mono); font-size:11px; color:var(--text-dim); cursor:pointer; }
   .fill-none{ color:var(--text-faint); }
   .fill-stale{ color:var(--amber, #e0a64a); cursor:help; }
+  .fill-cell-inner{ display:inline-flex; align-items:center; gap:4px; }
+  button.fill-edit{ padding:1px 5px; font-size:11px; line-height:1.3; }
+  .op-preview{ background:#fff; border-radius:6px; padding:10px; display:flex; justify-content:center; }
+  .op-preview svg{ max-width:100%; max-height:240px; }
+  .op-error{ color:var(--red); font-size:12px; min-height:16px; margin-top:8px; }
+  .op-note{ font-size:12px; color:var(--text-dim); margin:0 0 10px 0; line-height:1.5; }
+  .op-frame-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .op-frame-row input{ width:80px; }
   .row-actions{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
 
   .settings-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -543,6 +551,37 @@
   </div>
 </div>
 
+<!-- Openings editor: lets a hand-typed part (no DXF) carry openings too,
+     e.g. a frame, and re-fits openings that went stale after a resize. -->
+<div class="preview-modal" id="openingsModal">
+  <div class="preview-modal-col" style="max-width:720px;">
+    <div class="preview-modal-toolbar">
+      <span class="title" id="opTitle">Openings</span>
+      <div style="display:flex; gap:8px;">
+        <button class="ghost small" id="opCancelBtn">Cancel</button>
+        <button class="ghost small danger" id="opClearBtn">Remove all</button>
+        <button class="primary small" id="opSaveBtn">Save openings</button>
+      </div>
+    </div>
+    <div class="card" style="padding:16px 18px;">
+      <p class="op-note" id="opNote"></p>
+      <div class="op-frame-row">
+        <label class="small" style="margin:0;">Frame with rails</label>
+        <input type="number" id="opRail" step="0.0625" min="0" value="2">
+        <label class="small" style="margin:0;">in wide</label>
+        <button class="small" id="opMakeFrame">Make frame</button>
+      </div>
+      <table class="grid-table">
+        <thead><tr><th>From left in</th><th>From top in</th><th>Width in</th><th>Height in</th><th class="col-del"></th></tr></thead>
+        <tbody id="opBody"></tbody>
+      </table>
+      <div class="row-actions"><button class="small" id="opAddRow">+ Add opening</button></div>
+      <div class="op-error" id="opError"></div>
+      <div class="op-preview" id="opPreview"></div>
+    </div>
+  </div>
+</div>
+
 <div id="storageWarningBanner" style="display:none; background:#4a1420; color:#ffb9c8; border-bottom:1px solid var(--red); padding:10px 20px; font-size:12.5px; text-align:center;">
   &#9888; Changes aren't being saved to this browser right now (storage may be full, blocked, or private-browsing). Your work is still fine <b>within this session</b> — but export a backup (header &rarr; Export JSON / Backup all projects) before closing this tab, or it will be lost.
 </div>
@@ -620,7 +659,7 @@
         </div>
         <input type="file" id="dxfFileInput" accept=".dxf" multiple style="display:none">
         <div style="margin-top:16px;">
-          <label class="small">Paste rows &mdash; one part per line: <code>name, width, height, qty</code></label>
+          <label class="small">Paste rows &mdash; one part per line: <code>name, width, height, qty</code>, optionally <code>, rail</code> for a frame<span class="hint" tabindex="0">?<span class="hint-bubble">A 5th value makes the part a frame with rails that wide, so smaller parts can be nested in its opening. <code>Frame, 30, 20, 2, 1.5</code> = a 30 x 20 frame with 1.5" rails.</span></span></label>
           <textarea id="bulkPaste" placeholder="Shelf side, 24, 18, 12&#10;Back panel, 30, 20, 6"></textarea>
           <div class="row-actions">
             <button id="parseBulk">Add pasted rows</button>
@@ -1135,13 +1174,16 @@ function renderParts(){
       <td class="col-h"><input type="number" step="0.0625" value="${p.height}" data-f="height" class="${dimsBad?'input-invalid':''}" title="${dimsBad?'Height must be greater than 0':''}"></td>
       <td class="col-q"><input type="number" step="1" value="${p.qty}" data-f="qty"></td>
       <td style="text-align:center;"><input type="checkbox" ${p.rotate?'checked':''} data-f="rotate"></td>
-      <td class="col-fill" data-fill-cell>${fillCellHtml(p)}</td>
+      <td class="col-fill" data-fill-cell>${fillCellHtml(p, true)}</td>
       <td class="col-swatch"><input type="color" value="${p.color}" data-f="color"></td>
       <td class="col-del"><button class="ghost danger small" data-del="1" title="Remove">&times;</button></td>
     `;
     const fillTd = tr.querySelector('[data-fill-cell]');
     fillTd.addEventListener('change', e=>{
       if (e.target.matches('[data-fill]')){ p.useOpenings = e.target.checked; persistAll(); }
+    });
+    fillTd.addEventListener('click', e=>{
+      if (e.target.closest('[data-open-edit]')) openOpeningsEditor(p);
     });
     tr.querySelectorAll('input:not([data-fill])').forEach(inp=>{
       inp.addEventListener('input', ()=>{
@@ -1155,7 +1197,7 @@ function renderParts(){
           const bad = !isValidDims(p.width, p.height);
           tr.querySelector('[data-f="width"]').classList.toggle('input-invalid', bad);
           tr.querySelector('[data-f="height"]').classList.toggle('input-invalid', bad);
-          fillTd.innerHTML = fillCellHtml(p);
+          fillTd.innerHTML = fillCellHtml(p, true);
         }
         persistAll();
       });
@@ -1194,8 +1236,8 @@ document.getElementById('parseBulk').addEventListener('click', ()=>{
     if (!line.trim()) return;
     const cells = line.split(/[,\t]/).map(c=>c.trim());
     if (cells.length < 3) return;
-    const [name, w, h, q] = cells;
-    parts.push({
+    const [name, w, h, q, rail] = cells;
+    const part = {
       id: nextId(),
       name: name || ('Part '+(parts.length+1)),
       width: parseFloat(w)||0,
@@ -1203,7 +1245,10 @@ document.getElementById('parseBulk').addEventListener('click', ()=>{
       qty: q!==undefined && q!=='' ? Math.max(1, parseInt(q)||1) : 1,
       rotate: rot,
       color: null
-    });
+    };
+    const frame = frameOpening(part.width, part.height, parseFloat(rail));
+    if (frame) setPartOpenings(part, [frame]);
+    parts.push(part);
   });
   document.getElementById('bulkPaste').value = '';
   saveWorkingIntoCurrentProject();
@@ -1984,15 +2029,20 @@ function sanitizeOpenings(list){
     .map(o => ({ x:o.x, y:o.y, w:o.w, h:o.h }));
 }
 /* The small "Fill" cell shown for a part in the parts list and the DXF
-   review table. `p` only needs openings/useOpenings/openingsBase/width/height. */
-function fillCellHtml(p){
+   review table. `p` only needs openings/useOpenings/openingsBase/width/height.
+   `editable` adds the pencil that opens the openings editor (parts list only). */
+function fillCellHtml(p, editable){
   const n = Array.isArray(p.openings) ? p.openings.length : 0;
-  if (!n) return '<span class="fill-none">&mdash;</span>';
-  if (!openingsMatchDims(p)){
-    return `<span class="fill-stale" title="${escAttr(`Size changed since the DXF was read (was ${p.openingsBase.w}" x ${p.openingsBase.h}"), so its ${n} opening${n===1?'':'s'} are ignored. Re-import the DXF to use them again.`)}">&#9888;</span>`;
+  const edit = editable ? `<button class="ghost small fill-edit" data-open-edit title="${n ? 'Edit this part\'s openings' : 'Add openings (e.g. make it a frame) so smaller parts can be nested inside'}">&#9998;</button>` : '';
+  let body;
+  if (!n) body = editable ? '' : '<span class="fill-none">&mdash;</span>';
+  else if (!openingsMatchDims(p)){
+    body = `<span class="fill-stale" title="${escAttr(`Size changed since these openings were set (was ${p.openingsBase.w}" x ${p.openingsBase.h}"), so its ${n} opening${n===1?'':'s'} are ignored. Click the pencil to re-fit them, or re-import the DXF.`)}">&#9888;</span>`;
+  } else {
+    const sizes = p.openings.map(o => o.w.toFixed(2) + '" x ' + o.h.toFixed(2) + '"').join(', ');
+    body = `<label class="fill-tog" title="${escAttr(`${n} opening${n===1?'':'s'}: ${sizes}. Ticked: smaller parts may be nested inside.`)}"><input type="checkbox" data-fill ${p.useOpenings!==false?'checked':''}><span>${n}</span></label>`;
   }
-  const sizes = p.openings.map(o => o.w.toFixed(2) + '" x ' + o.h.toFixed(2) + '"').join(', ');
-  return `<label class="fill-tog" title="${escAttr(`${n} opening${n===1?'':'s'} found in the DXF: ${sizes}. Ticked: smaller parts may be nested inside.`)}"><input type="checkbox" data-fill ${p.useOpenings!==false?'checked':''}><span>${n}</span></label>`;
+  return editable ? `<span class="fill-cell-inner">${body}${edit}</span>` : body;
 }
 
 /* ---- filename quantity detection ----
@@ -2193,6 +2243,115 @@ document.getElementById('dxfAddBtn').addEventListener('click', ()=>{
 ['dxfUnitsSel','dxfRoundSixteenth','dxfSplitLoops','dxfDetectOpenings','dxfMinOpening'].forEach(id=>{
   document.getElementById(id).addEventListener('change', ()=>{}); // settings only affect files parsed AFTER a change, by design — re-drop if you flip a toggle mid-review
 });
+
+/* =====================================================================
+   OPENINGS EDITOR
+   Same openings a DXF would give, entered by hand: a frame preset (one
+   opening, rails all round) or any rectangles measured from the part's
+   top-left corner. Saving stamps the current size as openingsBase, which
+   is also how a stale set of openings gets re-fitted after a resize.
+   ===================================================================== */
+function frameOpening(w, h, rail){
+  if (!(rail > 0) || !isValidDims(w, h) || w - 2*rail <= 0 || h - 2*rail <= 0) return null;
+  return { x: rail, y: rail, w: +(w - 2*rail).toFixed(4), h: +(h - 2*rail).toFixed(4) };
+}
+function setPartOpenings(part, list){
+  if (list.length){
+    part.openings = list.map(o => ({ x:+o.x.toFixed(4), y:+o.y.toFixed(4), w:+o.w.toFixed(4), h:+o.h.toFixed(4) }));
+    part.openingsBase = { w: part.width, h: part.height };
+    part.useOpenings = true;
+  } else {
+    delete part.openings; delete part.openingsBase; delete part.useOpenings;
+  }
+}
+// '' when the list is usable on a W x H part, otherwise what is wrong.
+function validateOpenings(list, W, H){
+  for (let i = 0; i < list.length; i++){
+    const o = list[i], n = '#' + (i+1);
+    if (![o.x, o.y, o.w, o.h].every(v => typeof v === 'number' && isFinite(v))) return `Opening ${n}: fill in all four numbers.`;
+    if (!(o.w > 0 && o.h > 0)) return `Opening ${n}: width and height must be greater than 0.`;
+    if (o.x < 0 || o.y < 0 || o.x + o.w > W + 1e-9 || o.y + o.h > H + 1e-9) return `Opening ${n} runs outside the ${W}" x ${H}" part.`;
+    for (let j = 0; j < i; j++){
+      const q = list[j];
+      if (o.x < q.x + q.w - 1e-9 && q.x < o.x + o.w - 1e-9 && o.y < q.y + q.h - 1e-9 && q.y < o.y + o.h - 1e-9) return `Openings #${j+1} and ${n} overlap.`;
+    }
+  }
+  if (list.length > DXF_MAX_OPENINGS) return `At most ${DXF_MAX_OPENINGS} openings per part.`;
+  return '';
+}
+
+let opEdit = null; // { part, rows:[{x,y,w,h}] }
+function openOpeningsEditor(part){
+  if (!isValidDims(part.width, part.height)){ alert('Give this part a valid width and height first.'); return; }
+  opEdit = { part, rows: (part.openings || []).map(o => Object.assign({}, o)) };
+  document.getElementById('opTitle').textContent = `Openings \u2014 ${part.name || 'part'} (${part.width}" x ${part.height}")`;
+  const stale = part.openings && part.openings.length && !openingsMatchDims(part);
+  document.getElementById('opNote').innerHTML = stale
+    ? `&#9888; These openings were set when the part was <b>${part.openingsBase.w}" x ${part.openingsBase.h}"</b>; it is now ${part.width}" x ${part.height}". Adjust them (or make a frame) and save to use them again.`
+    : 'Cut-outs inside this part where smaller parts can be nested. Measured from the part\'s top-left corner, before the part gap (the nester keeps the gap from the cut edge itself).';
+  renderOpeningsEditor();
+  document.getElementById('openingsModal').classList.add('open');
+}
+function closeOpeningsEditor(){
+  document.getElementById('openingsModal').classList.remove('open');
+  opEdit = null;
+}
+function renderOpeningsEditor(){
+  const body = document.getElementById('opBody');
+  body.innerHTML = opEdit.rows.length ? opEdit.rows.map((o, i) => `<tr class="row" data-i="${i}">
+      ${['x','y','w','h'].map(k => `<td><input type="number" step="0.0625" value="${o[k]}" data-k="${k}"></td>`).join('')}
+      <td class="col-del"><button class="ghost danger small" data-op-del title="Remove">&times;</button></td>
+    </tr>`).join('')
+    : '<tr><td colspan="5" style="text-align:center; color:var(--text-faint); padding:16px 0;">No openings yet &mdash; make a frame above or add one.</td></tr>';
+  body.querySelectorAll('tr[data-i]').forEach(tr => {
+    const o = opEdit.rows[+tr.dataset.i];
+    tr.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
+      o[inp.dataset.k] = parseFloat(inp.value);
+      refreshOpeningsCheck();
+    }));
+    tr.querySelector('[data-op-del]').addEventListener('click', () => {
+      opEdit.rows.splice(+tr.dataset.i, 1);
+      renderOpeningsEditor();
+    });
+  });
+  refreshOpeningsCheck();
+}
+function refreshOpeningsCheck(){
+  const { part, rows } = opEdit;
+  const err = validateOpenings(rows, part.width, part.height);
+  document.getElementById('opError').textContent = err;
+  document.getElementById('opSaveBtn').disabled = !!err;
+  // Preview: the part with its openings cut out, y down like the sheet drawing.
+  const W = part.width, H = part.height, sw = Math.max(W, H) / 200;
+  const holes = err ? '' : rows.map(o => `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#ffffff" stroke="#3a3a46" stroke-width="${sw}" stroke-dasharray="${sw*4} ${sw*3}"/>`).join('');
+  document.getElementById('opPreview').innerHTML =
+    `<svg viewBox="${-sw} ${-sw} ${W + 2*sw} ${H + 2*sw}" width="${Math.min(640, W / Math.max(W, H) * 640)}" preserveAspectRatio="xMidYMid meet">
+      <rect x="0" y="0" width="${W}" height="${H}" fill="${escAttr(part.color || '#c9ccd1')}" stroke="#28283a" stroke-width="${sw}"/>${holes}
+    </svg>`;
+}
+document.getElementById('opMakeFrame').addEventListener('click', () => {
+  const rail = parseFloat(document.getElementById('opRail').value);
+  const f = frameOpening(opEdit.part.width, opEdit.part.height, rail);
+  if (!f){ document.getElementById('opError').textContent = 'Rails that wide leave no opening in this part.'; return; }
+  opEdit.rows = [f];
+  renderOpeningsEditor();
+});
+document.getElementById('opAddRow').addEventListener('click', () => {
+  const { part } = opEdit;
+  const w = +(part.width / 3).toFixed(4), h = +(part.height / 3).toFixed(4);
+  opEdit.rows.push({ x: +((part.width - w) / 2).toFixed(4), y: +((part.height - h) / 2).toFixed(4), w, h });
+  renderOpeningsEditor();
+});
+document.getElementById('opSaveBtn').addEventListener('click', () => {
+  if (validateOpenings(opEdit.rows, opEdit.part.width, opEdit.part.height)) return;
+  setPartOpenings(opEdit.part, opEdit.rows);
+  closeOpeningsEditor();
+  saveWorkingIntoCurrentProject();
+  render();
+});
+document.getElementById('opClearBtn').addEventListener('click', () => { opEdit.rows = []; renderOpeningsEditor(); });
+document.getElementById('opCancelBtn').addEventListener('click', closeOpeningsEditor);
+document.getElementById('openingsModal').addEventListener('click', e => { if (e.target.id === 'openingsModal') closeOpeningsEditor(); });
 
 /* =====================================================================
    PACKING ALGORITHM  (MaxRects, optional 90deg rotation)

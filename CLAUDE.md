@@ -12,7 +12,7 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - `BUILD.md` — build prerequisites and how export/offline work. `PLAN.md` — feature plan. `HANDOFF.md` — last session's state.
 
 ## Code map (JS sections inside the HTML, search the banner comments)
-- `DXF IMPORT` → `INTERIOR OPENINGS` → review modal (`dxfReadFile`, `renderDxfReviewTable`)
+- `DXF IMPORT` → `INTERIOR OPENINGS` → review modal (`dxfReadFile`, `renderDxfReviewTable`) → `OPENINGS EDITOR` (hand-typed openings)
 - `PACKING ALGORITHM` (MaxRects: `packSheetsOnce`, `packSheetsBest`, `packMoreAttempts`)
 - `RIGHTSIZE PASS`, `COMMON-LINE`, `REMNANT CAPTURE`, `STRATEGY COMPARISON`
 - Drawing: `drawSheet`, `drawSheetThumb`, `rotatedBinView`; PDF: `buildNestingPdf`

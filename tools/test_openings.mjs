@@ -191,8 +191,74 @@ if (shotDir){
   if (tbl) await tbl.screenshot({ path: path.join(shotDir, 'openings-parts.png') });
 }
 
+// ---- hand-typed parts (no DXF) --------------------------------------
+// Paste rows: a 5th value is the frame rail width.
+const pasted = await page.evaluate(() => {
+  parts = []; sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
+  saveWorkingIntoCurrentProject(); render();
+  document.getElementById('bulkPaste').value = 'Window frame, 30, 20, 2, 2\nTab, 6, 5, 10';
+  document.getElementById('parseBulk').click();
+  const fr = parts.find(p => p.name === 'Window frame');
+  runNesting();
+  const s = strategyResults[selectedStrategyKey];
+  return { openings: fr.openings, plain: parts.find(p => p.name === 'Tab').openings, sheets: s.sheets, nested: countNestedInOpenings(s.bins) };
+});
+check(JSON.stringify(pasted.openings) === JSON.stringify([{ x: 2, y: 2, w: 26, h: 16 }]) && pasted.plain === undefined,
+  'pasted "name, w, h, qty, rail" becomes a frame; 4-column rows stay plain');
+check(pasted.sheets === 2 && pasted.nested === 10, `pasted frames carry the tabs (${pasted.sheets} sheets, ${pasted.nested} nested)`);
+
+// Editor, driven through the UI: a plain part becomes a frame.
+await page.evaluate(() => {
+  parts = [{ id: nextId(), name: 'Gate', width: 40, height: 24, qty: 1, rotate: true, color: null }];
+  saveWorkingIntoCurrentProject(); render(); goToStep(1);
+});
+await page.click('#partsBody [data-open-edit]');
+await page.fill('#opRail', '3');
+await page.click('#opMakeFrame');
+if (shotDir) await page.screenshot({ path: path.join(shotDir, 'openings-editor.png') });
+await page.click('#opSaveBtn');
+const gate = await page.evaluate(() => ({ o: parts[0].openings, base: parts[0].openingsBase, open: document.getElementById('openingsModal').classList.contains('open') }));
+check(!gate.open && JSON.stringify(gate.o) === JSON.stringify([{ x: 3, y: 3, w: 34, h: 18 }]) && gate.base.w === 40,
+  'editor: "Make frame" with 3" rails saves one 34 x 18 opening');
+
+// Validation: overlapping and out-of-bounds openings can't be saved.
+const bad = await page.evaluate(() => [
+  validateOpenings([{ x: 1, y: 1, w: 10, h: 10 }, { x: 5, y: 5, w: 10, h: 10 }], 40, 24),
+  validateOpenings([{ x: 35, y: 1, w: 10, h: 5 }], 40, 24),
+  validateOpenings([{ x: 1, y: 1, w: 10, h: 10 }, { x: 11, y: 1, w: 10, h: 10 }], 40, 24),
+]);
+check(/overlap/.test(bad[0]) && /outside/.test(bad[1]) && bad[2] === '', 'editor rejects overlaps and out-of-bounds, accepts touching openings');
+await page.click('#partsBody [data-open-edit]');
+await page.click('#opAddRow');
+await page.fill('#opBody tr[data-i="1"] input[data-k="x"]', '0');
+const disabled = await page.evaluate(() => document.getElementById('opSaveBtn').disabled);
+check(disabled, 'Save is disabled while openings overlap');
+await page.click('#opCancelBtn');
+
+// Resize makes the openings stale; re-fitting in the editor revives them.
+const refit = await page.evaluate(() => {
+  const g = parts[0]; g.width = 44; render();
+  const staleBefore = partOpenings(g).length === 0 && !!document.querySelector('#partsBody .fill-stale');
+  openOpeningsEditor(g);
+  document.getElementById('opRail').value = '3';
+  document.getElementById('opMakeFrame').click();
+  document.getElementById('opSaveBtn').click();
+  return { staleBefore, after: partOpenings(g) };
+});
+check(refit.staleBefore && refit.after.length === 1 && refit.after[0].w === 38, 'stale openings are re-fitted from the editor');
+
+// Openings survive a project JSON round-trip.
+const roundTrip = await page.evaluate(() => {
+  const p = sanitizeImportedPart(JSON.parse(JSON.stringify(parts[0])), 0);
+  return partOpenings(p).length === 1 && p.openingsBase.w === 44;
+});
+check(roundTrip, 'openings survive export/import');
+
 // The PDF path draws the same sheets through drawSheet(); make sure it still builds.
 const pdfBytes = await page.evaluate(async () => {
+  sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 100 }];
+  document.getElementById('bulkPaste').value = 'Tab, 6, 5, 10';
+  document.getElementById('parseBulk').click();
   runNesting();
   for (const mode of ['report', 'overview']){
     const doc = await buildNestingPdf(mode);
