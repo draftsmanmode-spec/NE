@@ -52,8 +52,19 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Report + PDF: cut path and pierces of the nested parts; with cut speed / pierce time / $ per hour (Nesting settings, saved per project) also machine time and an "Est. cutting" stat
 - [x] Tests: frame/ring/bracket cut paths, typed estimate, totals, time and $, persistence (58 checks)
 
+## Done — Quote, big jobs, export by audience (2026-10-01)
+- [x] Customer quote = (material + cutting) x markup; money rounded to the cent once (`jobCosts`), so every line adds up
+- [x] Big jobs: per-strategy time budget (Quality 4 s, Balanced 2.5 s), strongest attempts first, whole filled/plain pairs; report notes a cut-short search. 2,500 parts: 22.8 s -> 5.1 s, same sheet count
+- [x] A part too big for every sheet is held back and named (with each sheet's real limit); everything else nests (was: whole nest refused)
+- [x] PDF "for": Internal (costs table, notes, material, linked sheet index, parts, remnants, sheets), Shop (no prices: material to pull, cut order, cut path/time, sheets), Customer (one page: quote total, price lines, parts)
+- [x] PDF navigation: bookmarks (opens with the panel), sheet index rows link to sheet pages, "Back to summary" on each sheet, document title/subject
+- [x] Trimmed: no paper/margin line, no Rotation column, short bullet notes, "not to scale" note kept for shop/internal
+- [x] Drawings: title box never covers parts (and is left out of PDFs); tall narrow parts get vertical labels
+- [x] Fix: PDF remnant table always said "Sheet 1"
+- [x] Tests: quote math and rounding, oversized part, Try harder, time budget, what each audience PDF must and must not say, links (69 checks)
+
 ## Next candidates
-- [ ] Decide whether "Customer quote" should include cutting cost (today: material x markup only)
+- [ ] Customer quote: optional terms/validity line and company header (logo, contact) from a settings field
 - [ ] Common-line cuts could subtract shared edges from the cut path
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants
 - [ ] Identical shapes drawn rotated 90 deg in one file are not merged yet (only same orientation)

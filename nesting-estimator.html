@@ -475,6 +475,15 @@
     </div>
     <div class="pv-controls" id="previewControls">
       <div class="pv-paper-row">
+        <label class="small" for="exportAudiencePv">PDF for</label>
+        <select id="exportAudiencePv">
+            <option value="internal">Internal report: costs, efficiency, everything</option>
+            <option value="shop">Shop cut sheets: drawings and parts, no prices</option>
+            <option value="customer">Customer quote: price and parts only</option>
+        </select>
+      </div>
+      <div class="small" id="audienceNotePv" style="color:var(--text-faint); margin:-4px 0 8px 0;"></div>
+      <div class="pv-paper-row">
         <label class="small" for="paperSizePv">Paper</label>
         <select id="paperSizePv">
           <option value="tabloid">Tabloid 11 &times; 17</option>
@@ -817,6 +826,14 @@
           <div class="checkline"><input type="checkbox" id="secSheets" checked><label class="small">Sheet layouts (drawings)</label></div>
         </div>
         <div class="pv-paper-row" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft);">
+          <label class="small" for="exportAudience">PDF for</label>
+          <select id="exportAudience">
+            <option value="internal">Internal report: costs, efficiency, everything</option>
+            <option value="shop">Shop cut sheets: drawings and parts, no prices</option>
+            <option value="customer">Customer quote: price and parts only</option>
+          </select>
+        </div>
+        <div class="pv-paper-row" style="margin-top:10px;">
           <label class="small" for="paperSize">Paper</label>
           <select id="paperSize">
             <option value="tabloid">Tabloid 11 &times; 17</option>
@@ -2153,6 +2170,32 @@ function cutTotals(bins){
   }
   return t;
 }
+/* What the job costs and what to quote: whole sheets plus, when rates are
+   set, cutting. The customer quote marks up both. */
+// Everything is rounded to the cent once, here, so every printed line adds
+// up to every printed total.
+const cents = v => Math.round(v * 100) / 100;
+function jobCosts(s, bins){
+  const cut = cutTotals(bins);
+  const material = s && s.costKnown ? cents(s.cost) : null;
+  const cutting = cut.cost != null ? cents(cut.cost) : null;
+  const subtotal = material != null ? cents(material + (cutting || 0)) : null;
+  const m = parseFloat(document.getElementById('markupPct').value);
+  const markupPct = m > 0 ? m : 0;
+  const quote = subtotal != null && markupPct > 0 ? cents(subtotal * (1 + markupPct/100)) : null;
+  return { cut, material, cutting, subtotal, markupPct, quote, markup: quote != null ? cents(quote - subtotal) : 0 };
+}
+function fmtMoney(v){ return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function oversizedHtml(){
+  if (!oversizedParts.length) return '';
+  const run = lastRunParams || {};
+  const pg = run.partGap != null ? run.partGap : (parseFloat(document.getElementById('partGap').value) || 0);
+  const bg = run.borderGap != null ? run.borderGap : (parseFloat(document.getElementById('borderGap').value) || 0);
+  const list = oversizedParts.map(p=> `${escHtml(p.name)} (${p.width}" &times; ${p.height}") &times; ${p.qty}`).join(', ');
+  const limits = sheetTypes.filter(st=> isValidDims(st.width, st.height))
+    .map(st=> `${escHtml(st.name)} up to ${(st.width - 2*bg - pg).toFixed(2)}" &times; ${(st.height - 2*bg - pg).toFixed(2)}"`).join('; ');
+  return `Too big for every sheet: ${list}.` + (limits ? ` After the border and part gaps the sheets hold parts ${limits}.` : '') + ' Everything else was nested.';
+}
 function fmtMinutes(m){
   if (m < 60) return m.toFixed(1) + ' min';
   const h = Math.floor(m / 60);
@@ -2688,7 +2731,10 @@ function partTagFor(defId){
 // (and by tryHarder() from the settings that run used) before packing.
 let nestOpeningsEnabled = true;
 function unitForPart(p, idx){
-  return { defId:p.id, name:p.name, tag:idx+1, w:p.width, h:p.height, allowRotate:!!p.rotate, color:p.color, openings: nestOpeningsEnabled ? partOpenings(p) : [] };
+  // The tag is the part's row number in the parts list, even when only some
+  // parts are being nested (oversized ones are held back).
+  const gi = parts.indexOf(p);
+  return { defId:p.id, name:p.name, tag:(gi >= 0 ? gi : idx)+1, w:p.width, h:p.height, allowRotate:!!p.rotate, color:p.color, openings: nestOpeningsEnabled ? partOpenings(p) : [] };
 }
 function expandUnits(partsIn){
   const units = [];
@@ -2756,7 +2802,13 @@ function sheetOrderVariants(sheetTypesIn){
   }
   return variants;
 }
-function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, optimizeMix){
+/* Big jobs (thousands of parts) would otherwise freeze the window for tens
+   of seconds. Each strategy gets a slice of this budget; attempts run in
+   order of how good they usually are, so stopping early keeps the strong
+   ones. searchStats records how much was tried, for the report. */
+const SEARCH_BUDGET_MS = { 0: Infinity, 1: 2500, 2: 4000 };
+let searchStats = { tried: 0, planned: 0 };
+function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, optimizeMix, budgetMs){
   const units = expandUnits(partsIn);
   const attempts = [];
   if (quality===0){
@@ -2787,7 +2839,12 @@ function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, opti
   // cost a sheet. The best plain layout is also the report's "without
   // openings" comparison - found in the same search, so it can't beat the
   // result by luck of a different random shuffle.
-  if (hasOpenings(units)) attempts.slice().forEach(a=> attempts.push({ order: a.order.map(plainUnit), rule: a.rule, plain: true }));
+  // Each twin runs right after its filled attempt, so a search cut short by
+  // the time budget still has a fair comparison.
+  if (hasOpenings(units)){
+    const filled = attempts.splice(0);
+    filled.forEach(a=> attempts.push(a, { order: a.order.map(plainUnit), rule: a.rule, plain: true }));
+  }
 
   // "Optimize sheet mix": also try several sheet-type priority orders (not
   // just the order they're listed in) and keep whichever combination scores
@@ -2796,14 +2853,23 @@ function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, opti
   const sheetOrders = optimizeMix ? sheetOrderVariants(sheetTypesIn) : [sheetTypesIn];
 
   let best = null, bestScore = Infinity, bestPlain = null, bestPlainScore = Infinity;
-  for (const sheetOrder of sheetOrders){
-    for (const a of attempts){
+  const t0 = performance.now(), needPlain = attempts.some(a=> a.plain);
+  let tried = 0;
+  search:
+  for (const a of attempts){
+    for (const sheetOrder of sheetOrders){
       const res = packSheetsOnce(sheetOrder, a.order, partGap, borderGap, a.rule);
+      tried++;
       const sc = scoreResult(res, sheetTypesIn);
       if (sc < bestScore){ best = res; bestScore = sc; }
       if (a.plain && sc < bestPlainScore){ bestPlain = res; bestPlainScore = sc; }
     }
+    // Stop only after a whole pair (filled + its plain twin, every sheet
+    // order), so the comparison always gets exactly the same effort.
+    if (budgetMs && performance.now() - t0 > budgetMs && (!needPlain || a.plain)) break search;
   }
+  searchStats.tried += tried;
+  searchStats.planned += attempts.length * sheetOrders.length;
   if (best) best.plainBest = bestPlain;
   return best;
 }
@@ -2827,15 +2893,24 @@ function baselineStats(res, sheetTypesIn){
 /* Rightsize a packed result and settle its "without openings" comparison.
    The plain layout is rightsized with openings off so it stays plain; if
    that tips it ahead on cost, it simply becomes the result. */
-function finishStrategy(res, sheetTypesIn, partsIn, partGap, borderGap){
+function finishStrategy(res, sheetTypesIn, partsIn, partGap, borderGap, tooBig){
   rightsizeBins(res.bins, sheetTypesIn, partsIn, partGap, borderGap, res.usage || {});
-  const plain = res.plainBest || null;
+  let plain = res.plainBest || null;
   if (plain && plain !== res){
     withOpeningsOff(()=> rightsizeBins(plain.bins, sheetTypesIn, partsIn, partGap, borderGap, plain.usage || {}));
     if (costScore(plain, sheetTypesIn) < costScore(res, sheetTypesIn)) res = plain;
   }
+  const extra = tooBig || [];
+  res = { bins: res.bins, usage: res.usage, unplaced: res.unplaced.concat(extra) };
+  if (plain) plain = { bins: plain.bins, unplaced: plain.unplaced.concat(extra) };
   return { result: res, noOpenings: plain ? baselineStats(plain, sheetTypesIn) : null };
 }
+/* A part no sheet can hold (either way round, after gaps) is held back from
+   the search and reported by name, instead of sinking the whole nest. */
+function fitsSomeSheet(p, sheetsIn, partGap, borderGap){
+  return sheetsIn.some(st=> isViableAlone(st, [p], partGap, borderGap));
+}
+let oversizedParts = [];   // parts held back by the last computeAllStrategies()
 
 /* Runs N additional RANDOMIZED attempts (shuffled part orderings × all
    placement rules × all sheet-priority orders) and returns whichever is
@@ -2882,7 +2957,10 @@ function packMoreAttempts(sheetTypesIn, partsIn, partGap, borderGap, currentBest
   const baseOrder = (currentBest.unplaced && currentBest.unplaced.length===0) ? orderFromBins(currentBest.bins, partsIn) : null;
   const canLocalSearch = baseOrder && baseOrder.length === units.length;
 
-  for (let n=0; n<extraCount; n++){
+  const t0 = performance.now();
+  let n = 0;
+  for (; n<extraCount; n++){
+    if (n > 0 && performance.now() - t0 > SEARCH_BUDGET_MS[2]) break;   // big jobs: stay responsive
     // Alternate: even attempts explore globally (fresh random restart, to
     // escape a bad region entirely); odd attempts explore locally (a small
     // 2-exchange nudge of the current best, to refine what's already close).
@@ -2905,7 +2983,7 @@ function packMoreAttempts(sheetTypesIn, partsIn, partGap, borderGap, currentBest
       if (psc < bestScore - 1e-6){ best = pres; bestScore = psc; improved = true; }
     }
   }
-  return { result: best, improved, plainBest: bestPlain };
+  return { result: best, improved, plainBest: bestPlain, tried: n, packs: twins ? 2*n : n };
 }
 
 /* =====================================================================
@@ -3153,9 +3231,23 @@ function preparePrint(){
   });
 }
 
+/* Who a PDF is for decides what goes in it. Each audience gets only what it
+   acts on: the shop gets cut sheets and no prices, the customer gets the
+   price and the parts and nothing internal, and the internal report gets
+   the full cost picture. */
+const PDF_AUDIENCES = {
+  internal: { label: 'Internal report', title: 'Nesting report', file: 'report' },
+  shop:     { label: 'Shop cut sheets', title: 'Cut sheets',     file: 'cut sheets' },
+  customer: { label: 'Customer quote',  title: 'Quotation',      file: 'quote' },
+};
+const AUDIENCE_NOTES = {
+  internal: 'Costs (material by sheet type, cutting, markup, quote), job notes, a linked sheet index, parts, remnants and one page per sheet. Opens with bookmarks.',
+  shop: 'No prices. Material to pull, cut order, cut path and machine time, a linked sheet index, parts and one page per sheet.',
+  customer: 'One page: quote total, price lines with markup built in, and the parts list. No sheets, costs or efficiency. Both export buttons give the same quote.',
+};
 const REPORT_PREFS_KEY = 'nestingEstimatorReportPrefs_v1';
 let reportPrefs = { parts:true, breakdown:true, commonLines:true, remnants:true, sheets:true,
-                    paper:'tabloid', customW:11, customH:17 };
+                    paper:'tabloid', customW:11, customH:17, audience:'internal' };
 function loadReportPrefs(){
   try{
     const raw = localStorage.getItem(REPORT_PREFS_KEY);
@@ -3167,9 +3259,22 @@ function loadReportPrefs(){
   document.getElementById('secRemnants').checked = reportPrefs.remnants;
   document.getElementById('secSheets').checked = reportPrefs.sheets;
   document.getElementById('paperSize').value = reportPrefs.paper || 'tabloid';
+  document.getElementById('exportAudience').value = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'internal';
+  syncAudienceUI();
   document.getElementById('paperCustomW').value = reportPrefs.customW;
   document.getElementById('paperCustomH').value = reportPrefs.customH;
   syncPaperUI();
+}
+function syncAudienceUI(){
+  const aud = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'internal';
+  document.getElementById('exportAudience').value = aud;
+  document.getElementById('exportAudiencePv').value = aud;
+  document.getElementById('audienceNotePv').textContent = AUDIENCE_NOTES[aud];
+}
+function refreshPreviewForAudience(){
+  if (document.getElementById('previewModal').classList.contains('open') && lastNestResult && lastNestResult.bins.length){
+    buildOverviewContent(lastNestResult.bins, 'previewModalBody');
+  }
 }
 function saveReportPrefsFromUI(){
   reportPrefs = {
@@ -3179,15 +3284,17 @@ function saveReportPrefsFromUI(){
     remnants: document.getElementById('secRemnants').checked,
     sheets: document.getElementById('secSheets').checked,
     paper: document.getElementById('paperSize').value,
+    audience: document.getElementById('exportAudience').value,
     customW: parseFloat(document.getElementById('paperCustomW').value) || 11,
     customH: parseFloat(document.getElementById('paperCustomH').value) || 17,
   };
   try{ localStorage.setItem(REPORT_PREFS_KEY, JSON.stringify(reportPrefs)); }catch(e){}
+  syncAudienceUI();
   syncPaperUI();
   if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
 }
 ['secParts','secBreakdown','secCommonLines','secRemnants','secSheets',
- 'paperSize','paperCustomW','paperCustomH'].forEach(id=>{
+ 'paperSize','paperCustomW','paperCustomH','exportAudience'].forEach(id=>{
   document.getElementById(id).addEventListener('change', saveReportPrefsFromUI);
 });
 loadReportPrefs();
@@ -3239,20 +3346,31 @@ function strategyStats(bins, unplaced){
 function computeAllStrategies(partGap, borderGap, quality, sheetTypesForNesting){
   const validSheets = sheetTypesForNesting || sheetTypes.filter(st=> isValidDims(st.width, st.height));
   strategyResults = {};
+  searchStats = { tried: 0, planned: 0 };
 
-  validSheets.forEach(st=>{
-    if (!isViableAlone(st, parts, partGap, borderGap)) return;
-    const { result: res, noOpenings } = finishStrategy(packSheetsBest([st], parts, partGap, borderGap, quality, false), [st], parts, partGap, borderGap);
+  const live = parts.filter(p=> p.qty > 0 && isValidDims(p.width, p.height));
+  oversizedParts = live.filter(p=> !fitsSomeSheet(p, validSheets, partGap, borderGap));
+  const nestable = parts.filter(p=> !oversizedParts.includes(p));
+  const tooBig = [];
+  oversizedParts.forEach(p=>{ for (let i=0;i<p.qty;i++) tooBig.push(unitForPart(p, parts.indexOf(p))); });
+  if (!nestable.some(p=> p.qty > 0 && isValidDims(p.width, p.height))) return [];
+
+  const singles = validSheets.filter(st=> isViableAlone(st, nestable, partGap, borderGap));
+  const searched = () => { const r = searchStats; searchStats = { tried: 0, planned: 0 }; return r; };
+  const count = singles.length + (validSheets.length > 1 ? 1 : 0);
+  const slice = SEARCH_BUDGET_MS[quality] / Math.max(1, count);
+  singles.forEach(st=>{
+    const { result: res, noOpenings } = finishStrategy(packSheetsBest([st], nestable, partGap, borderGap, quality, false, slice), [st], nestable, partGap, borderGap, tooBig);
     strategyResults['single:'+st.id] = Object.assign(
-      { label: st.name, bins: res.bins, unplaced: res.unplaced, noOpenings },
+      { label: st.name, bins: res.bins, unplaced: res.unplaced, noOpenings, tooBig, search: searched() },
       strategyStats(res.bins, res.unplaced)
     );
   });
 
   if (validSheets.length > 1){
-    const { result: res, noOpenings } = finishStrategy(packSheetsBest(validSheets, parts, partGap, borderGap, quality, true), validSheets, parts, partGap, borderGap);
+    const { result: res, noOpenings } = finishStrategy(packSheetsBest(validSheets, nestable, partGap, borderGap, quality, true, slice), validSheets, nestable, partGap, borderGap, tooBig);
     strategyResults['mixed'] = Object.assign(
-      { label: 'Optimized mix (all sheet types)', bins: res.bins, unplaced: res.unplaced, noOpenings },
+      { label: 'Optimized mix (all sheet types)', bins: res.bins, unplaced: res.unplaced, noOpenings, tooBig, search: searched() },
       strategyStats(res.bins, res.unplaced)
     );
   }
@@ -3328,7 +3446,9 @@ function runNesting(){
   const sortedKeys = computeAllStrategies(partGap, borderGap, quality, validSheetTypesForNesting);
   if (sortedKeys.length===0){
     lastNestResult = null;
-    results.innerHTML = invalidNote + '<div class="warning-box"><b>None of your sheet sizes can hold every part.</b> Add a bigger sheet type, or check whether a part\'s dimensions are larger than any sheet you\'ve defined.</div>';
+    results.innerHTML = invalidNote + (oversizedParts.length
+      ? '<div class="warning-box"><b>None of the parts fit any of your sheets.</b> ' + oversizedHtml() + '</div>'
+      : '<div class="warning-box"><b>None of your sheet sizes can hold every part.</b> Add a bigger sheet type, or check whether a part\'s dimensions are larger than any sheet you\'ve defined.</div>');
     return;
   }
   selectedStrategyKey = sortedKeys[0];
@@ -3383,23 +3503,27 @@ function tryHarder(partGap, borderGap, quality){
 
     const EXTRA = 60;
     nestOpeningsEnabled = !lastRunParams || lastRunParams.fillOpenings !== false;
-    const currentBest = { bins: s.bins, unplaced: s.unplaced };
-    const { result, improved, plainBest } = packMoreAttempts(strategySheets, parts, partGap, borderGap, currentBest, EXTRA);
     const target = strategyResults[startStrategyKey];
+    const tooBig = target.tooBig || [];
+    const nestable = parts.filter(p=> !oversizedParts.includes(p));
+    const currentBest = { bins: s.bins, unplaced: s.unplaced.filter(u=> !tooBig.includes(u)) };
+    const { result, improved, plainBest, tried, packs } = packMoreAttempts(strategySheets, nestable, partGap, borderGap, currentBest, EXTRA);
+    if (target.search) target.search.tried += packs;
     let main = result, better = improved, baselineChanged = false;
-    if (improved) rightsizeBins(main.bins, strategySheets, parts, partGap, borderGap, main.usage || {});
+    if (improved) rightsizeBins(main.bins, strategySheets, nestable, partGap, borderGap, main.usage || {});
     // The extra search ran with openings empty too, so the comparison gets
     // the same effort: a Try-harder gain is not credited to the openings.
     if (plainBest && target.noOpenings){
-      if (plainBest !== main) withOpeningsOff(()=> rightsizeBins(plainBest.bins, strategySheets, parts, partGap, borderGap, plainBest.usage || {}));
-      const cand = baselineStats(plainBest, strategySheets);
+      if (plainBest !== main) withOpeningsOff(()=> rightsizeBins(plainBest.bins, strategySheets, nestable, partGap, borderGap, plainBest.usage || {}));
+      const cand = baselineStats({ bins: plainBest.bins, unplaced: plainBest.unplaced.concat(tooBig) }, strategySheets);
       if (cand.costScore < target.noOpenings.costScore){ target.noOpenings = cand; baselineChanged = true; }
       if (plainBest !== main && costScore(plainBest, strategySheets) < costScore(main, strategySheets)){ main = plainBest; better = true; }
     }
 
     if (better || baselineChanged){
-      const newStats = strategyStats(main.bins, main.unplaced);
-      if (better) Object.assign(target, { bins: main.bins, unplaced: main.unplaced }, newStats);
+      const allUnplaced = main.unplaced.concat(tooBig);
+      const newStats = strategyStats(main.bins, allUnplaced);
+      if (better) Object.assign(target, { bins: main.bins, unplaced: allUnplaced }, newStats);
 
       // Only redraw the on-screen report if the user is still looking at the
       // same strategy this result belongs to — if they've since clicked a
@@ -3430,7 +3554,7 @@ function tryHarder(partGap, borderGap, quality){
       const after = document.getElementById('tryHarderNote');
       if (!better){
         after.style.color = 'var(--text-dim)';
-        after.textContent = `No better layout found after ${EXTRA} more tries; the openings comparison above was refined. (Click again to try another ${EXTRA}.)`;
+        after.textContent = `No better layout found after ${tried} more tries; the openings comparison above was refined. (Click again to try more.)`;
         return;
       }
       after.style.color = 'var(--green)';
@@ -3438,7 +3562,10 @@ function tryHarder(partGap, borderGap, quality){
     } else {
       if (selectedStrategyKey !== startStrategyKey){ return; }
       note.style.color = 'var(--text-dim)';
-      note.textContent = `No better layout found after ${EXTRA} more tries — the current one is already very hard to beat. (Click again to try another ${EXTRA}.)`;
+      const sn = document.getElementById('searchNote');
+      if (sn && target.search && target.search.tried >= target.search.planned) sn.remove();
+      else if (sn && target.search) sn.querySelector('span').textContent = target.search.tried;
+      note.textContent = `No better layout found after ${tried} more tries — the current one is already very hard to beat. (Click again to try more.)`;
       btn.disabled = false;
     }
   }, 30);
@@ -3451,7 +3578,7 @@ function renderReportBody(partGap, borderGap, quality){
   const commonLines = detectCommonLines(bins, partGap);
   const remnants = findRemnants(bins, 6);
   const nestedInOpenings = countNestedInOpenings(bins);
-  const cut = cutTotals(bins);
+  const costs = jobCosts(s, bins), cut = costs.cut;
 
   const byType = {};
   sheetTypes.forEach(st=> byType[st.id] = { st, sheets:0, area:0, used:0 });
@@ -3479,11 +3606,10 @@ function renderReportBody(partGap, borderGap, quality){
   html += statBlock(s.efficiency.toFixed(1)+'%', 'Overall efficiency', s.efficiency>=70?'green':(s.efficiency>=45?'purple':'red'));
   html += statBlock(parts.reduce((s2,p)=>s2+(p.qty||0),0), 'Parts requested', 'purple');
   html += statBlock(unplaced.length, 'Parts unplaced', unplaced.length? 'red':'green');
-  if (s.costKnown) html += statBlock('$'+s.cost.toFixed(2), 'Est. material cost', 'purple');
-  const markupPct = parseFloat(document.getElementById('markupPct').value);
-  const hasMarkup = s.costKnown && markupPct > 0;
-  if (hasMarkup) html += statBlock('$'+(s.cost*(1+markupPct/100)).toFixed(2), `Customer quote (+${markupPct}%)`, 'green');
-  if (cut.cost != null) html += statBlock('$'+cut.cost.toFixed(2), 'Est. cutting', 'purple');
+  if (costs.material != null) html += statBlock(fmtMoney(costs.material), 'Est. material cost', 'purple');
+  if (costs.cutting != null) html += statBlock(fmtMoney(costs.cutting), 'Est. cutting', 'purple');
+  if (costs.material != null && costs.cutting != null && costs.quote == null) html += statBlock(fmtMoney(costs.subtotal), 'Material + cutting', 'purple');
+  if (costs.quote != null) html += statBlock(fmtMoney(costs.quote), `Customer quote (+${costs.markupPct}%)`, 'green');
   html += '</div>';
 
   // Efficiency benchmark context — a bare % means little on its own.
@@ -3493,14 +3619,20 @@ function renderReportBody(partGap, borderGap, quality){
     : 'well below typical — check part sizes against sheet size, or try a different strategy above';
   html += `<div class="gap-note" style="margin-top:-14px;">Efficiency context: this result is <span>${effBand}</span>.</div>`;
 
-  if (unplaced.length){
+  if (oversizedParts.length) html += `<div class="warning-box" id="oversizedNote"><b>Not nested &mdash; too big for any sheet.</b> ${oversizedHtml()}</div>`;
+  const stockOut = unplaced.filter(u=> !(s.tooBig || []).includes(u));
+  if (stockOut.length){
     const grouped = {};
-    unplaced.forEach(u=> grouped[u.defId] = (grouped[u.defId]||0)+1);
+    stockOut.forEach(u=> grouped[u.defId] = (grouped[u.defId]||0)+1);
     const lines = Object.entries(grouped).map(([defId,count])=>{
       const p = parts.find(x=>x.id===defId);
-      return (p? p.name : 'Unknown') + ' &times; ' + count;
+      return escHtml(p? p.name : 'Unknown') + ' &times; ' + count;
     }).join(', ');
-    html += `<div class="warning-box"><b>${unplaced.length} part(s) could not be placed</b> &mdash; sheet stock ran out for: ${lines}. Edit the sheet quantity below, or try a different strategy above, and re-run.</div>`;
+    html += `<div class="warning-box"><b>${stockOut.length} part(s) could not be placed</b> &mdash; sheet stock ran out for: ${lines}. Edit the sheet quantity below, or try a different strategy above, and re-run.</div>`;
+  }
+  const sr = s.search;
+  if (sr && sr.planned && sr.tried < sr.planned){
+    html += `<div class="gap-note" id="searchNote" style="margin-top:-6px;">&#9201; Large job: compared <span>${sr.tried}</span> of ${sr.planned} candidate layouts within the time limit, strongest first. &ldquo;Try harder&rdquo; searches more.</div>`;
   }
 
   html += `<div class="gap-note">Strategy: <span>${escHtml(strategyResults[selectedStrategyKey].label)}</span> &nbsp;&middot;&nbsp; Part gap: <span>${partGap}"</span> &nbsp;&middot;&nbsp; Border gap: <span>${borderGap}"</span> &nbsp;&middot;&nbsp; Quality pass: <span>${['Fast','Balanced','Quality'][quality]}</span></div>`;
@@ -3549,7 +3681,7 @@ function renderReportBody(partGap, borderGap, quality){
     <button id="btnEditParts">&#9998; Edit parts</button>
     <button id="btnEditSheets">&#9998; Edit sheets &amp; settings</button>
     <button id="btnTryHarder" title="Alternates fresh random layouts with small tweaks to your current best one — only updates if it finds a genuinely better result, never makes it worse">&#8635; Try harder</button>
-    <button id="btnPrint">Export full report as PDF</button>
+    <button id="btnPrint" title="Choose who the PDF is for under Report sections (internal, shop or customer)">Export PDF: ${escHtml(PDF_AUDIENCES[reportPrefs.audience] ? PDF_AUDIENCES[reportPrefs.audience].label : PDF_AUDIENCES.internal.label)}</button>
     <button id="btnOverview" class="primary" title="One page: summary + every sheet, zoomed out">Preview &amp; export&hellip;</button>
   </div>
   <div id="tryHarderNote" style="font-size:12px; color:var(--text-dim); margin:-10px 0 18px 0; min-height:16px;"></div>`;
@@ -3645,6 +3777,11 @@ function refreshPreview(){
   preparePrint();
 }
 
+document.getElementById('exportAudiencePv').addEventListener('change', ()=>{
+  document.getElementById('exportAudience').value = document.getElementById('exportAudiencePv').value;
+  saveReportPrefsFromUI();
+  refreshPreviewForAudience();
+});
 document.getElementById('paperSizePv').addEventListener('change', ()=>{
   document.getElementById('paperSize').value = document.getElementById('paperSizePv').value;
   saveReportPrefsFromUI();
@@ -3695,12 +3832,13 @@ function buildOverviewContent(bins, containerId){
     </div>
     <div class="ov-stats-box">
       <div class="ov-stat"><span class="ov-num">${bins.length}</span><span class="ov-lbl">Sheets needed</span></div>
-      <div class="ov-stat"><span class="ov-num">${overallEff.toFixed(1)}%</span><span class="ov-lbl">Efficiency</span></div>
+      ${(reportPrefs.audience || 'internal') === 'internal' ? `<div class="ov-stat"><span class="ov-num">${overallEff.toFixed(1)}%</span><span class="ov-lbl">Efficiency</span></div>` : ''}
       <div class="ov-stat"><span class="ov-num">${totalParts}</span><span class="ov-lbl">Parts</span></div>
-      ${anyCost ? `<div class="ov-stat"><span class="ov-num">$${totalCost.toFixed(2)}</span><span class="ov-lbl">Est. cost</span></div>` : ''}
+      ${anyCost && (reportPrefs.audience || 'internal') === 'internal' ? `<div class="ov-stat"><span class="ov-num">$${totalCost.toFixed(2)}</span><span class="ov-lbl">Est. cost</span></div>` : ''}
     </div>
     <div class="ov-materials-box">${matSummary}</div>
     <div class="ov-meta">Part gap ${partGap}" &middot; Border gap ${borderGap}"</div>
+    ${reportPrefs.audience === 'customer' ? '<div class="ov-meta" style="color:#b4237a;">Customer quote: the PDF is one price page. The sheets below are for your reference and are not included.</div>' : ''}
   `;
   container.appendChild(head);
 
@@ -4008,39 +4146,51 @@ function drawSheet(canvas, bin, sheetNumber, eff){
     // Labels go in the part's solid material; for a frame that is a rail,
     // not the middle, where nested parts would sit on top of the text.
     const lb = placementLabelBox(p);
-    const bx = px + lb.x*scale, by = py + lb.y*scale, bw = lb.w*scale, bh = lb.h*scale;
+    const bx = px + lb.x*scale, by = py + lb.y*scale;
+    // A tall, narrow part (a strip standing on end, a frame's side rail)
+    // gets its label turned to run along it instead of spilling sideways
+    // into its neighbours.
+    const vertical = lb.h*scale > lb.w*scale*1.5;
+    const bw = vertical ? lb.h*scale : lb.w*scale, bh = vertical ? lb.w*scale : lb.h*scale;
+    ctx.save();
+    ctx.translate(bx + lb.w*scale/2, by + lb.h*scale/2);
+    if (vertical) ctx.rotate(-Math.PI/2);
     const fontSize = Math.max(9, Math.min(15, Math.min(bw,bh)*0.16));
     ctx.fillStyle = '#141018';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     ctx.font = '600 ' + fontSize + 'px Inter, sans-serif';
-    const fitsLabel = ctx.measureText(label).width < bw-6 && fontSize*2.4 < bh;
+    const fitsLabel = ctx.measureText(tag + ' ' + label).width < bw-6 && fontSize*2.4 < bh;
     const fitsDims = ctx.measureText(dims).width < bw-6;
 
     if (fitsLabel){
       // Full label: "#N name" then dims underneath
-      ctx.fillText(tag + ' ' + label, bx+bw/2, by+bh/2 - fontSize*0.6);
+      ctx.fillText(tag + ' ' + label, 0, -fontSize*0.6);
       ctx.font = fontSize*0.82 + 'px "IBM Plex Mono", monospace';
-      if (fitsDims) ctx.fillText(dims, bx+bw/2, by+bh/2 + fontSize*0.7);
+      if (fitsDims) ctx.fillText(dims, 0, fontSize*0.7);
     } else if (Math.min(bw,bh) > 26) {
       // Medium: dims only
       ctx.font = Math.max(8,fontSize*0.8) + 'px "IBM Plex Mono", monospace';
-      if (ctx.measureText(dims).width < bw-4) ctx.fillText(dims, bx+bw/2, by+bh/2);
-      else { ctx.font = '700 ' + Math.min(fontSize*1.4, Math.min(bw,bh)*0.5) + 'px Inter, sans-serif'; ctx.fillText(tag, bx+bw/2, by+bh/2); }
+      if (ctx.measureText(dims).width < bw-4) ctx.fillText(dims, 0, 0);
+      else { ctx.font = '700 ' + Math.min(fontSize*1.4, Math.min(bw,bh)*0.5) + 'px Inter, sans-serif'; ctx.fillText(tag, 0, 0); }
     } else {
       // Too small for anything but a tag number
       const tagSize = Math.max(7, Math.min(Math.min(bw,bh)*0.5, 13));
       ctx.font = '700 ' + tagSize + 'px Inter, sans-serif';
-      ctx.fillText(tag, bx+bw/2, by+bh/2);
+      ctx.fillText(tag, 0, 0);
     }
+    ctx.restore();
   });
 
-  // Title block (light)
+  // Title block (light). Never on top of a part: it is only drawn where the
+  // corner is clear, and never in a PDF, whose page header already says it.
   const tbW = Math.min(230, cssW*0.55);
   const tbH = 76;
   const tx = cssW - tbW - 6;
   const ty = cssH - tbH - 6;
+  const tbHitsPart = bin.placements.some(p=> p.x*scale < tx+tbW && (p.x+p.w)*scale > tx && p.y*scale < ty+tbH && (p.y+p.h)*scale > ty);
+  if (exportRenderScale || tbHitsPart) return;
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.fillRect(tx,ty,tbW,tbH);
   ctx.strokeStyle = '#7c3aed';
@@ -4226,6 +4376,7 @@ function pdfTable(doc, ctx, cols, rows, opt){
     const rowH = Math.max(lineH + pad, lineH * Math.max.apply(null, lines.map(l => l.length)) + pad);
 
     if (!opt.noBreak && ctx.y + rowH > ctx.bottom){ ctx.newPage(); headerRow(); }
+    if (opt.onRow) opt.onRow(r, x0, ctx.y, W, rowH);
 
     let x = x0;
     cols.forEach((c, ci) => {
@@ -4313,8 +4464,60 @@ function sheetLegendRows(bin){
    Document builder. mode 'report' = full report + one page per sheet;
    mode 'overview' = the single-page zoomed-out summary.
    --------------------------------------------------------------------- */
-async function buildNestingPdf(mode){
+function pdfBullets(doc, ctx, items, size, rgb){
+  const sz = size || PDF_TYPE.note;
+  items.forEach(it => {
+    pdfText(doc, sz, it.bold ? 'bold' : 'body', it.rgb || rgb || PDF_INK);
+    const lines = doc.splitTextToSize(it.text, ctx.contentW - 0.2);
+    ctx.ensure(pdfLine(sz) * lines.length + 0.06);
+    doc.text('•', ctx.M + 0.02, ctx.y + pdfLine(sz));
+    lines.forEach(ln => { doc.text(ln, ctx.M + 0.2, ctx.y + pdfLine(sz)); ctx.y += pdfLine(sz); });
+    ctx.y += 0.06;
+  });
+  ctx.y += 0.10;
+}
+/* Money rows: label on the left, amount on the right, a rule above the
+   total. `rows` are { label, detail, amount, total }. */
+function pdfMoneyTable(doc, ctx, rows){
+  const td = PDF_TYPE.td, lh = pdfLine(td) + 0.08;
+  ctx.ensure(lh * rows.length + 0.3);
+  const x0 = ctx.M, x1 = ctx.M + ctx.contentW;
+  rows.forEach(r => {
+    if (r.total){
+      doc.setDrawColor(PDF_INK[0], PDF_INK[1], PDF_INK[2]);
+      doc.setLineWidth(0.012);
+      doc.line(x0, ctx.y + 0.02, x1, ctx.y + 0.02);
+      ctx.y += 0.06;
+    }
+    pdfText(doc, r.total ? PDF_TYPE.td + 2 : td, r.total ? 'bold' : 'body', r.total ? PDF_PURPLE : PDF_INK);
+    doc.text(r.label, x0, ctx.y + pdfLine(td));
+    if (r.detail){
+      const lw = doc.getTextWidth(r.label + '  ');
+      pdfText(doc, PDF_TYPE.note, 'body', PDF_MUTED);
+      const maxW = ctx.contentW * 0.62 - lw;
+      const d = doc.splitTextToSize(r.detail, Math.max(1, maxW))[0];
+      doc.text(d, x0 + lw, ctx.y + pdfLine(td));
+    }
+    pdfText(doc, r.total ? PDF_TYPE.td + 2 : td, r.total ? 'bold' : 'mono', r.total ? PDF_PURPLE : PDF_INK);
+    doc.text(r.amount, x1, ctx.y + pdfLine(td), { align: 'right' });
+    ctx.y += lh + (r.total ? 0.04 : 0);
+    if (!r.total){
+      doc.setDrawColor(PDF_HAIR[0], PDF_HAIR[1], PDF_HAIR[2]);
+      doc.setLineWidth(0.005);
+      doc.line(x0, ctx.y - 0.03, x1, ctx.y - 0.03);
+    }
+  });
+  ctx.y += 0.18;
+}
+const pdfMoney = fmtMoney;
+
+// `trace`, when given, collects every string written - the tests use it to
+// check what each audience's PDF does and doesn't say.
+async function buildNestingPdf(mode, audienceKey, trace){
   const jsPDF = pdfLib();
+  const audience = PDF_AUDIENCES[audienceKey] ? audienceKey : 'internal';
+  const A = PDF_AUDIENCES[audience];
+  const isCust = audience === 'customer', isShop = audience === 'shop', isInt = audience === 'internal';
   const s = strategyResults[selectedStrategyKey];
   const bins = (lastNestResult && lastNestResult.bins) || [];
   const paper = currentPaper();
@@ -4322,10 +4525,21 @@ async function buildNestingPdf(mode){
   const proj = getProject(currentProjectId);
   const projName = proj ? proj.name : 'Nesting report';
   const dateStr = new Date().toLocaleDateString();
-  const compact = (paper.w - 2 * M) < 8;
 
   const doc = new jsPDF({ unit: 'in', format: [paper.w, paper.h], orientation: 'portrait', compress: true });
   pdfRegisterFonts(doc);
+  if (trace){
+    const write = doc.text;
+    doc.text = function(t){ trace.push(Array.isArray(t) ? t.join(' ') : String(t)); return write.apply(this, arguments); };
+  }
+  doc.setProperties({
+    title: projName + ' - ' + A.title,
+    subject: A.label + ', ' + bins.length + ' sheet' + (bins.length === 1 ? '' : 's'),
+    creator: 'Sheet Nesting Estimator',
+    keywords: 'sheet nesting, ' + A.file,
+  });
+  // Bookmarks panel open where there is more than one thing to jump to.
+  doc.setDisplayMode('fullpage', 'continuous', isCust ? 'UseNone' : 'UseOutlines');
 
   const ctx = {
     M,
@@ -4340,137 +4554,196 @@ async function buildNestingPdf(mode){
     },
     ensure(h){ if (this.y + h > this.bottom) this.newPage(); },
   };
+  const page = () => doc.internal.getCurrentPageInfo().pageNumber;
+  const mark = (title, parent) => doc.outline.add(parent || null, title, { pageNumber: page() });
 
-  // ---- title block -------------------------------------------------
+  // ---- title -------------------------------------------------------
   pdfText(doc, PDF_TYPE.title, 'display', PDF_INK);
   doc.text(projName, M, ctx.y + pdfLine(PDF_TYPE.title));
   ctx.y += pdfLine(PDF_TYPE.title) + 0.10;
   pdfText(doc, PDF_TYPE.subtitle, 'body', PDF_MUTED);
-  doc.text('Sheet nesting ' + (mode === 'overview' ? 'overview' : 'report')
-           + '   ·   ' + (s && s.label ? s.label : '') + '   ·   ' + dateStr,
-           M, ctx.y + pdfLine(PDF_TYPE.subtitle));
+  doc.text(A.title + (mode === 'overview' && !isCust ? ' (overview)' : '') + '   ·   ' + dateStr
+           + (isInt && s && s.label ? '   ·   ' + s.label : ''), M, ctx.y + pdfLine(PDF_TYPE.subtitle));
   ctx.y += pdfLine(PDF_TYPE.subtitle) + 0.10;
   doc.setDrawColor(PDF_PURPLE[0], PDF_PURPLE[1], PDF_PURPLE[2]);
   doc.setLineWidth(0.022);
   doc.line(M, ctx.y, M + ctx.contentW, ctx.y);
   ctx.y += 0.22;
+  mark('Summary');
 
   const included = bins.filter((b, i) => sheetPrintPlan(b, i).include);
-  const orients = bins.map((b, i) => sheetPrintPlan(b, i).orient);
-  const mix = orients.length === 0 ? 'n/a'
-    : orients.every(o => o === 'landscape') ? 'landscape'
-    : orients.every(o => o === 'portrait') ? 'portrait' : 'mixed per sheet';
-
-  // ---- summary -----------------------------------------------------
+  const costs = jobCosts(s, bins), cut = costs.cut;
   const totalParts = parts.reduce((a, p) => a + (p.qty || 0), 0);
-  const stats = [
-    { num: bins.length, lbl: 'Sheets needed' },
-    { num: s.efficiency.toFixed(1) + '%', lbl: 'Efficiency' },
-    { num: totalParts, lbl: 'Parts requested' },
-    { num: s.unplaced.length, lbl: 'Parts unplaced', bad: s.unplaced.length > 0 },
-  ];
-  if (s.costKnown) stats.push({ num: '$' + s.cost.toFixed(2), lbl: 'Est. cost' });
-  const cut = cutTotals(bins);
-  if (cut.cost != null) stats.push({ num: '$' + cut.cost.toFixed(2), lbl: 'Est. cutting' });
-  pdfStatStrip(doc, ctx, stats);
-
+  // What the customer is quoted for: valid parts, minus anything not placed.
+  const quotedQty = p => isValidDims(p.width, p.height) ? Math.max(0, (p.qty || 0) - (unplacedCount(p.id))) : 0;
+  const nested = countNestedInOpenings(bins);
   const usage = {};
   bins.forEach(b => { usage[b.sheetType.id] = (usage[b.sheetType.id] || 0) + 1; });
-  const matSummary = sheetTypes.filter(st => usage[st.id])
-    .map(st => st.name + ' (' + st.width + '" × ' + st.height + '") × ' + usage[st.id])
-    .join('   ·   ');
-  if (matSummary) pdfParagraph(doc, ctx, matSummary, PDF_TYPE.td, PDF_INK);
+  const usedTypes = sheetTypes.filter(st => usage[st.id]);
+  const unplacedBy = {};
+  s.unplaced.forEach(u => { unplacedBy[u.defId] = (unplacedBy[u.defId] || 0) + 1; });
+  function unplacedCount(id){ return unplacedBy[id] || 0; }
+  const unplacedList = Object.entries(unplacedBy).map(([id, n]) => {
+    const p = parts.find(x => x.id === id);
+    return (p ? p.name : 'Unknown') + ' x ' + n;
+  }).join(', ');
 
-  pdfParagraph(doc, ctx,
-    'Paper ' + paper.label + '   ·   orientation ' + mix + '   ·   margin ' + M + '"   ·   '
-    + included.length + ' of ' + bins.length + ' sheets   ·   proportional reference drawing, not to scale',
-    PDF_TYPE.note, PDF_MUTED, 'mono');
+  // ---- headline numbers ------------------------------------------------
+  const price = costs.subtotal != null ? (costs.quote != null ? costs.quote : costs.subtotal) : null;
+  const stats = [];
+  if (isCust){
+    stats.push({ num: price != null ? pdfMoney(price) : 'On request', lbl: 'Quote total' });
+    stats.push({ num: parts.reduce((a, p) => a + quotedQty(p), 0), lbl: 'Parts' });
+    stats.push({ num: parts.filter(p => quotedQty(p) > 0).length, lbl: 'Part types' });
+  } else {
+    stats.push({ num: bins.length, lbl: 'Sheets' });
+    stats.push({ num: totalParts, lbl: 'Parts' });
+    if (s.unplaced.length) stats.push({ num: s.unplaced.length, lbl: 'Not placed', bad: true });
+    if (isInt) stats.push({ num: s.efficiency.toFixed(1) + '%', lbl: 'Efficiency' });
+    if (isShop && cut.parts) stats.push({ num: (cut.length / 12).toFixed(0) + ' ft', lbl: 'Cut path' });
+    if (isShop && cut.parts) stats.push({ num: cut.pierces, lbl: 'Pierces' });
+    if (isShop && cut.minutes != null) stats.push({ num: fmtMinutes(cut.minutes), lbl: 'Machine time' });
+    if (isInt && costs.subtotal != null) stats.push({ num: pdfMoney(costs.subtotal), lbl: costs.cutting != null ? 'Material + cutting' : 'Material' });
+    if (isInt && costs.quote != null) stats.push({ num: pdfMoney(costs.quote), lbl: 'Customer quote' });
+  }
+  pdfStatStrip(doc, ctx, stats);
 
-  const savingText = openingsSavingText(s, countNestedInOpenings(bins));
-  if (savingText) pdfParagraph(doc, ctx, savingText + ' Openings are drawn dashed.', PDF_TYPE.note, PDF_MUTED);
-  const cutText = cutSummaryText(cut);
-  if (cutText) pdfParagraph(doc, ctx, cutText, PDF_TYPE.note, PDF_MUTED);
+  // ---- money -------------------------------------------------------------
+  if (isInt && costs.material != null){
+    pdfSectionTitle(doc, ctx, 'Costs');
+    const rows = usedTypes.map(st => ({
+      label: st.name, detail: usage[st.id] + ' sheet' + (usage[st.id] === 1 ? '' : 's') + ' × ' + pdfMoney(st.cost || 0) + '   (' + st.width + '" × ' + st.height + '")',
+      amount: pdfMoney(usage[st.id] * (st.cost || 0)),
+    }));
+    if (costs.cutting != null){
+      rows.push({ label: 'Laser cutting', detail: Math.round(cut.length).toLocaleString('en-US') + ' in, ' + cut.pierces + ' pierces, ' + fmtMinutes(cut.minutes),
+                  amount: pdfMoney(costs.cutting) });
+    }
+    if (costs.markupPct > 0){
+      rows.push({ label: 'Cost', amount: pdfMoney(costs.subtotal), total: true });
+      rows.push({ label: 'Markup ' + costs.markupPct + '%', amount: pdfMoney(costs.markup) });
+      rows.push({ label: 'Customer quote', amount: pdfMoney(costs.quote), total: true });
+    } else {
+      rows.push({ label: 'Total cost', amount: pdfMoney(costs.subtotal), total: true });
+    }
+    pdfMoneyTable(doc, ctx, rows);
+  } else if (isCust){
+    pdfSectionTitle(doc, ctx, 'Price');
+    if (price != null){
+      // Markup is built into each line; cutting takes the remainder so the
+      // lines add up to the total to the cent.
+      const k = 1 + costs.markupPct / 100;
+      const mat = costs.cutting != null ? cents(costs.material * k) : price;
+      const rows = [{ label: 'Material', detail: usedTypes.map(st => st.name).join(', '), amount: pdfMoney(mat) }];
+      if (costs.cutting != null) rows.push({ label: 'Laser cutting', amount: pdfMoney(cents(price - mat)) });
+      rows.push({ label: 'Total', amount: pdfMoney(price), total: true });
+      pdfMoneyTable(doc, ctx, rows);
+    } else {
+      pdfParagraph(doc, ctx, 'Price on request.', PDF_TYPE.td, PDF_INK);
+    }
+  }
 
-  if (s.unplaced.length){
-    const grouped = {};
-    s.unplaced.forEach(u => { grouped[u.defId] = (grouped[u.defId] || 0) + 1; });
-    const lines = Object.entries(grouped).map(([defId, count]) => {
-      const p = parts.find(x => x.id === defId);
-      return (p ? p.name : 'Unknown') + ' x ' + count;
-    }).join(', ');
-    ctx.ensure(0.44);
-    pdfText(doc, PDF_TYPE.td, 'bold', PDF_RED);
-    doc.text(s.unplaced.length + ' part(s) could not be placed: ' + lines, M, ctx.y + 0.14);
-    ctx.y += 0.34;
+  // ---- what needs attention ---------------------------------------------
+  const notes = [];
+  if (isCust){
+    if (s.unplaced.length) notes.push({ text: 'Not included in this quote: ' + unplacedList + '.', bold: true, rgb: PDF_RED });
+  } else {
+    if (oversizedParts.length){
+      notes.push({ text: 'Too big for every sheet, not nested: ' + oversizedParts.map(p => p.name + ' (' + p.width + '" × ' + p.height + '") x ' + p.qty).join(', ') + '.', bold: true, rgb: PDF_RED });
+    }
+    const tooBig = s.tooBig || [], outBy = {};
+    s.unplaced.filter(u => !tooBig.includes(u)).forEach(u => { outBy[u.name] = (outBy[u.name] || 0) + 1; });
+    const outList = Object.entries(outBy).map(([n, c]) => n + ' x ' + c).join(', ');
+    if (outList) notes.push({ text: 'Sheet stock ran out, not placed: ' + outList + '.', bold: true, rgb: PDF_RED });
+    if ((isShop || costs.material == null) && usedTypes.length) notes.push({ text: 'Material to pull: ' + usedTypes.map(st => usage[st.id] + ' × ' + st.name + ' (' + st.width + '" × ' + st.height + '")').join(', ') + '.' });
+    if (nested > 0) notes.push({ text: 'Cut order: ' + nested + ' part' + (nested === 1 ? ' sits' : 's sit') + ' inside another part\'s opening (dashed) - cut them before that opening.' });
+    if (isInt){
+      const savingText = openingsSavingText(s, nested);
+      if (savingText) notes.push({ text: savingText });
+    }
+    if (cut.parts) notes.push({ text: isShop
+      ? 'Cut path ' + Math.round(cut.length).toLocaleString('en-US') + ' in, ' + cut.pierces + ' pierces' + (cut.estimated ? ' (' + cut.estimated + ' of ' + cut.parts + ' parts estimated)' : '') + '.'
+      : cutSummaryText(cut) });
+    if (isInt && reportPrefs.commonLines){
+      const cl = detectCommonLines(bins, (lastRunParams && lastRunParams.partGap) || 0);
+      if (cl.count) notes.push({ text: cl.count + ' common-line cut' + (cl.count === 1 ? '' : 's') + ' possible (~' + cl.totalLength.toFixed(0) + '" of shared edge).' });
+    }
+  }
+  if (!isCust && bins.length) notes.push({ text: 'Drawings are proportional references, not to scale - take dimensions from the parts list, not the drawing.', rgb: PDF_MUTED });
+  if (notes.length){
+    pdfSectionTitle(doc, ctx, isCust ? 'Notes' : 'Notes for this job');
+    pdfBullets(doc, ctx, notes);
+  }
+
+  // ---- material breakdown (internal) ---------------------------------------
+  if (isInt && reportPrefs.breakdown && usedTypes.length){
+    pdfSectionTitle(doc, ctx, 'Material');
+    const cols = [{ label: 'Material', key: 'mat', w: 3.4, wrap: true }, { label: 'Sheet size', key: 'size', w: 2, mono: true },
+                  { label: 'Sheets', key: 'sheets', w: 1.1, align: 'right', mono: true }, { label: 'Used', key: 'eff', w: 1.2, align: 'right', mono: true }];
+    pdfTable(doc, ctx, cols, usedTypes.map(st => {
+      const bs = bins.filter(b => b.sheetType.id === st.id);
+      const area = bs.reduce((a, b) => a + b.w * b.h, 0), used = bs.reduce((a, b) => a + b.placements.reduce((x, p) => x + placedArea(p), 0), 0);
+      return { mat: st.name, size: st.width + '" × ' + st.height + '"', sheets: bs.length, eff: (area > 0 ? 100 * used / area : 0).toFixed(1) + '%' };
+    }));
+  }
+
+  // ---- sheet index: every row jumps to its sheet's page ------------------
+  const indexRows = [];
+  const wantSheets = mode === 'report' && !isCust && (isShop || reportPrefs.sheets);
+  if (wantSheets && included.length > 1){
+    pdfSectionTitle(doc, ctx, 'Sheets');
+    const cols = [{ label: 'Sheet', key: 'n', w: 0.9, mono: true }, { label: 'Material', key: 'mat', w: 3.6, wrap: true },
+                  { label: 'Size', key: 'size', w: 1.9, mono: true }, { label: 'Parts', key: 'parts', w: 0.9, align: 'right', mono: true }];
+    if (isInt) cols.push({ label: 'Used', key: 'eff', w: 1.0, align: 'right', mono: true });
+    cols.push({ label: 'Page', key: 'pg', w: 0.9, align: 'right', mono: true });
+    pdfTable(doc, ctx, cols, included.map(b => {
+      const i = bins.indexOf(b);
+      const e = b.w * b.h > 0 ? 100 * b.placements.reduce((a, p) => a + placedArea(p), 0) / (b.w * b.h) : 0;
+      return { n: '#' + (i + 1), mat: b.sheetType.name, size: b.w + '" × ' + b.h + '"', parts: b.placements.length,
+               eff: e.toFixed(0) + '%', pg: '', _sheet: i };
+    }), { onRow: (r, x, y, w, h, colX) => indexRows.push({ sheet: r._sheet, page: page(), x, y, w, h, pgX: x + w - 0.05, pgY: y }) });
+  }
+
+  // ---- parts ---------------------------------------------------------------
+  // The one-page overview has its own parts key under the thumbnails.
+  if (isCust || (mode === 'report' && (reportPrefs.parts || isShop))){
+    pdfSectionTitle(doc, ctx, 'Parts');
+    mark('Parts');
+    const placedBy = {};
+    bins.forEach(b => b.placements.forEach(p => { placedBy[p.defId] = (placedBy[p.defId] || 0) + 1; }));
+    const anyUnplaced = s.unplaced.length > 0;
+    const cols = isCust
+      ? [{ label: 'Part', key: 'name', w: 5.4, wrap: true }, { label: 'Size', key: 'size', w: 2.4, mono: true },
+         { label: 'Qty', key: 'qty', w: 1, align: 'right', mono: true }]
+      : [{ label: 'Tag', key: 'tag', w: 0.8, mono: true }, { label: 'Part', key: 'name', w: 4.4, wrap: true },
+         { label: 'Size', key: 'size', w: 2.2, mono: true }, { label: 'Qty', key: 'qty', w: 1, align: 'right', mono: true }];
+    if (!isCust && anyUnplaced) cols.push({ label: 'Not placed', key: 'unpl', w: 1.4, align: 'right', mono: true });
+    pdfTable(doc, ctx, cols, parts.filter(p => (p.qty || 0) > 0).map(p => ({
+      tag: '#' + (parts.indexOf(p) + 1), name: p.name, size: p.width + '" × ' + p.height + '"',
+      qty: isCust ? quotedQty(p) : p.qty, unpl: unplacedBy[p.id] || 0,
+      _color: isCust ? null : (p.color || '#c9ccd1'),
+      _emph: (unplacedBy[p.id] || 0) > 0 ? { unpl: true } : null,
+    })).filter(r => !isCust || r.qty > 0), { swatch: isCust ? null : 'name' });
+  }
+
+  // ---- remnants (where to put the offcuts) -------------------------------
+  if (!isCust && reportPrefs.remnants && mode === 'report'){
+    const rem = findRemnants(bins, 6);
+    if (rem.length){
+      pdfSectionTitle(doc, ctx, 'Reusable remnants');
+      pdfTable(doc, ctx,
+        [{ label: 'From sheet', key: 'sheet', w: 1.6, mono: true },
+         { label: 'Size', key: 'size', w: 2.6, mono: true },
+         { label: 'Area', key: 'area', w: 2.2, align: 'right', mono: true }],
+        rem.map(r => ({ sheet: '#' + (r.sheetIndex + 1), size: r.w + '" × ' + r.h + '"', area: (r.w * r.h / 144).toFixed(1) + ' ft²' })));
+    }
   }
 
   if (mode === 'report'){
-    // ---- parts list ------------------------------------------------
-    if (reportPrefs.parts){
-      pdfSectionTitle(doc, ctx, 'Parts list');
-      const placed = {}, unpl = {};
-      bins.forEach(b => b.placements.forEach(p => { placed[p.defId] = (placed[p.defId] || 0) + 1; }));
-      s.unplaced.forEach(u => { unpl[u.defId] = (unpl[u.defId] || 0) + 1; });
-      const cols = compact
-        ? [{ label: 'Tag', key: 'tag', w: 0.8, mono: true }, { label: 'Part', key: 'name', w: 4.2, wrap: true },
-           { label: 'Size', key: 'size', w: 2.2, mono: true }, { label: 'Qty', key: 'qty', w: 1, align: 'right', mono: true },
-           { label: 'Unplaced', key: 'unpl', w: 1.4, align: 'right', mono: true }]
-        : [{ label: 'Tag', key: 'tag', w: 0.8, mono: true }, { label: 'Part', key: 'name', w: 4.2, wrap: true },
-           { label: 'Size', key: 'size', w: 2.2, mono: true }, { label: 'Rotation', key: 'rot', w: 1.3 },
-           { label: 'Qty', key: 'qty', w: 1, align: 'right', mono: true },
-           { label: 'Placed', key: 'placed', w: 1.1, align: 'right', mono: true },
-           { label: 'Unplaced', key: 'unpl', w: 1.4, align: 'right', mono: true }];
-      pdfTable(doc, ctx, cols, parts.map((p, idx) => ({
-        tag: '#' + (idx + 1), name: p.name, size: p.width + '" × ' + p.height + '"',
-        rot: p.rotate ? 'Allowed' : 'Fixed', qty: p.qty || 0,
-        placed: placed[p.id] || 0, unpl: unpl[p.id] || 0,
-        _color: p.color || '#c9ccd1',
-        _emph: (unpl[p.id] || 0) > 0 ? { unpl: true } : null,
-      })), { swatch: 'name' });
-    }
-
-    // ---- material breakdown ---------------------------------------
-    if (reportPrefs.breakdown){
-      pdfSectionTitle(doc, ctx, 'Material breakdown');
-      const byType = {};
-      sheetTypes.forEach(st => { byType[st.id] = { st, sheets: 0, area: 0, used: 0 }; });
-      bins.forEach(b => {
-        const rec = byType[b.sheetType.id];
-        rec.sheets += 1; rec.area += b.w * b.h;
-        rec.used += b.placements.reduce((a, p) => a + placedArea(p), 0);
-      });
-      const cols = [
-        { label: 'Material', key: 'mat', w: 3.4, wrap: true },
-        { label: 'Sheet size', key: 'size', w: 2, mono: true },
-        { label: 'Sheets', key: 'sheets', w: 1.1, align: 'right', mono: true },
-        { label: 'Used area', key: 'used', w: 1.8, align: 'right', mono: true },
-        { label: 'Efficiency', key: 'eff', w: 1.4, align: 'right', mono: true },
-      ];
-      if (s.costKnown) cols.push({ label: 'Cost', key: 'cost', w: 1.3, align: 'right', mono: true });
-      pdfTable(doc, ctx, cols, Object.values(byType).filter(r => r.sheets > 0).map(r => ({
-        mat: r.st.name, size: r.st.width + '" × ' + r.st.height + '"', sheets: r.sheets,
-        used: r.used.toFixed(1) + ' in²',
-        eff: (r.area > 0 ? (100 * r.used / r.area).toFixed(1) : '0.0') + '%',
-        cost: r.st.cost != null ? '$' + (r.sheets * r.st.cost).toFixed(2) : '-',
-      })));
-    }
-
-    // ---- remnants --------------------------------------------------
-    if (reportPrefs.remnants){
-      const rem = findRemnants(bins, 6);
-      if (rem.length){
-        pdfSectionTitle(doc, ctx, 'Reusable remnants');
-        pdfTable(doc, ctx,
-          [{ label: 'Sheet', key: 'sheet', w: 1.4, mono: true },
-           { label: 'Size', key: 'size', w: 2.6, mono: true },
-           { label: 'Area', key: 'area', w: 2.2, align: 'right', mono: true }],
-          rem.map(r => ({ sheet: 'Sheet ' + ((r.binIndex != null ? r.binIndex : 0) + 1),
-                          size: r.w + '" × ' + r.h + '"', area: (r.w * r.h).toFixed(1) + ' in²' })));
-      }
-    }
-
     // ---- one page per sheet, drawing + its own parts list -----------
-    if (reportPrefs.sheets){
+    const sheetPages = {};
+    if (wantSheets){
+      let sheetsNode = null;
       for (let i = 0; i < bins.length; i++){
         const bin = bins[i];
         const plan = sheetPrintPlan(bin, i);
@@ -4479,26 +4752,29 @@ async function buildNestingPdf(mode){
         const pw = land ? paper.h : paper.w;
         const ph = land ? paper.w : paper.h;
         doc.addPage([paper.w, paper.h], land ? 'landscape' : 'portrait');
+        sheetPages[i] = page();
+        if (!sheetsNode) sheetsNode = doc.outline.add(null, 'Sheets', { pageNumber: page() });
+        doc.outline.add(sheetsNode, 'Sheet ' + (i + 1) + ' - ' + bin.sheetType.name, { pageNumber: page() });
 
         const eff = bin.w * bin.h > 0
           ? (100 * bin.placements.reduce((a, p) => a + placedArea(p), 0) / (bin.w * bin.h)) : 0;
 
         let hy = M;
         pdfText(doc, PDF_TYPE.sheetHead, 'display', PDF_INK);
-        doc.text('Sheet ' + (i + 1) + '  ·  ' + bin.sheetType.name, M, hy + pdfLine(PDF_TYPE.sheetHead));
+        doc.text('Sheet ' + (i + 1) + ' of ' + bins.length + '  ·  ' + bin.sheetType.name, M, hy + pdfLine(PDF_TYPE.sheetHead));
+        // Every sheet page links back to the summary.
+        pdfText(doc, PDF_TYPE.note, 'body', PDF_PURPLE);
+        const back = 'Back to summary', bw = doc.getTextWidth(back), by = hy + pdfLine(PDF_TYPE.sheetHead) - 0.02;
+        doc.text(back, pw - M - bw, by);
+        doc.link(pw - M - bw, by - pdfLine(PDF_TYPE.note), bw, pdfLine(PDF_TYPE.note) + 0.04, { pageNumber: 1 });
+        hy += pdfLine(PDF_TYPE.sheetHead) + 0.06;
         pdfText(doc, PDF_TYPE.sheetMeta, 'mono', PDF_MUTED);
-        doc.text(bin.w + '" × ' + bin.h + '"   ·   ' + bin.placements.length + ' parts   ·   '
-                 + eff.toFixed(1) + '% used', pw - M, hy + pdfLine(PDF_TYPE.sheetHead), { align: 'right' });
-        hy += pdfLine(PDF_TYPE.sheetHead) + 0.08;
-
-        const notes = [];
-        if (plan.rotate) notes.push('Rotated 90° to fit ' + paper.label);
-        if (plan.forced) notes.push('orientation overridden to ' + plan.orient);
-        if (notes.length){
-          pdfText(doc, PDF_TYPE.note, 'body', PDF_MUTED);
-          doc.text(notes.join('   ·   '), M, hy + pdfLine(PDF_TYPE.note));
-          hy += pdfLine(PDF_TYPE.note) + 0.06;
-        }
+        const nestedHere = countNestedInOpenings([bin]);
+        doc.text(bin.w + '" × ' + bin.h + '"   ·   ' + bin.placements.length + ' parts'
+                 + (isInt ? '   ·   ' + eff.toFixed(1) + '% used' : '')
+                 + (nestedHere ? '   ·   ' + nestedHere + ' inside openings: cut those first' : '')
+                 + (plan.rotate ? '   ·   drawn rotated 90°' : ''), M, hy + pdfLine(PDF_TYPE.sheetMeta));
+        hy += pdfLine(PDF_TYPE.sheetMeta) + 0.10;
 
         // Reserve room under the drawing for this sheet's own parts list,
         // laid out in as many columns as it takes to stay short.
@@ -4558,7 +4834,16 @@ async function buildNestingPdf(mode){
         }
       }
     }
-  } else {
+    // Now that sheet pages exist, make the index rows jump to them.
+    indexRows.forEach(r => {
+      const target = sheetPages[r.sheet];
+      if (!target) return;
+      doc.setPage(r.page);
+      doc.link(r.x, r.y, r.w, r.h, { pageNumber: target });
+      pdfText(doc, PDF_TYPE.td, 'mono', PDF_PURPLE);
+      doc.text(String(target), r.pgX, r.pgY + pdfLine(PDF_TYPE.td) - 0.02, { align: 'right' });
+    });
+  } else if (!isCust) {
     // ---- 1-page overview: every included sheet + a combined parts key --
     const n = included.length;
     if (n){
@@ -4634,7 +4919,7 @@ async function buildNestingPdf(mode){
           pdfText(doc, PDF_TYPE.legendTd, 'bold', PDF_INK);
           doc.text('Sheet ' + (idx + 1), cx, cy + 0.16);
           pdfText(doc, PDF_TYPE.legendTh, 'mono', PDF_MUTED);
-          doc.text(bin.w + '×' + bin.h + '"  ' + e.toFixed(0) + '%', cx + cellW, cy + 0.16, { align: 'right' });
+          doc.text(bin.w + '×' + bin.h + '"' + (isInt ? '  ' + e.toFixed(0) + '%' : ''), cx + cellW, cy + 0.16, { align: 'right' });
 
           const img = renderSheetPng(bin, { rotate: false }, idx + 1, e, iw, true);
           const dW = iw, dH = iw / img.aspect;
@@ -4674,7 +4959,7 @@ async function buildNestingPdf(mode){
     }
   }
 
-  pdfStampFooters(doc, projName, dateStr, M);
+  pdfStampFooters(doc, projName + '   ·   ' + A.title, dateStr, M);
   return doc;
 }
 
@@ -4714,11 +4999,13 @@ async function exportPdf(mode, btn){
   if (btn){ btn.disabled = true; btn.textContent = 'Building PDF…'; }
   try {
     await new Promise(r => setTimeout(r, 30));
-    const doc = await buildNestingPdf(mode);
+    const audience = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'internal';
+    const doc = await buildNestingPdf(mode, audience);
     const bytes = new Uint8Array(doc.output('arraybuffer'));
     const proj = getProject(currentProjectId);
     const safe = ((proj && proj.name) || 'nesting').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'nesting';
-    const name = safe + (mode === 'overview' ? ' - overview' : ' - report') + '.pdf';
+    const kind = PDF_AUDIENCES[audience].file + (mode === 'overview' && audience !== 'customer' ? ' overview' : '');
+    const name = safe + ' - ' + kind + '.pdf';
     const saved = await savePdfBytes(bytes, name);
     if (btn) btn.textContent = saved ? 'Saved ✓' : 'Cancelled';
     setTimeout(() => { if (btn) btn.textContent = label; }, 2200);

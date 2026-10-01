@@ -502,6 +502,76 @@ check(Math.abs(cutRes.t.minutes - 3.1733) < 0.001 && Math.abs(cutRes.t.cost - 6.
 check(cutRes.kept, 'laser rates are saved with the project');
 check(cutRes.real && cutRes.resized, 'DXF cut path is used as read, and falls back to the estimate after a resize');
 
+// ---- money, oversized parts, big jobs, export audiences ----------------
+const ex = await page.evaluate(async () => {
+  const out = {};
+  parts = [{ id: nextId(), name: 'Typed frame', width: 30, height: 20, qty: 2, rotate: true, color: null },
+           { id: nextId(), name: 'Tab', width: 6, height: 5, qty: 10, rotate: true, color: null },
+           { id: nextId(), name: 'Monster', width: 200, height: 100, qty: 1, rotate: true, color: null }];
+  setPartOpenings(parts[0], [frameOpening(30, 20, 2)]);
+  sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
+  document.getElementById('fillOpenings').checked = true;
+  document.getElementById('markupPct').value = '35';
+  document.getElementById('cutSpeed').value = '200'; document.getElementById('pierceSec').value = '1'; document.getElementById('laserRate').value = '120';
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  let s = strategyResults[selectedStrategyKey];
+  out.nest = { sheets: s.sheets, unplaced: s.unplaced.length, strategies: Object.keys(strategyResults).length };
+  out.oversizedNote = (document.getElementById('oversizedNote') || {}).textContent || '';
+  const c = jobCosts(s, s.bins);
+  out.costs = { material: c.material, cutting: +c.cutting.toFixed(4), quote: +c.quote.toFixed(4) };
+  out.quoteOnScreen = document.getElementById('reportBody').textContent.includes(fmtMoney(c.quote));
+  tryHarder(0.25, 0.5, 2);
+  await new Promise(r => setTimeout(r, 1500));
+  s = strategyResults[selectedStrategyKey];
+  out.afterTry = { unplaced: s.unplaced.length, note: (document.getElementById('tryHarderNote') || {}).textContent || '' };
+  for (const aud of ['internal', 'shop', 'customer']){
+    const trace = [];
+    const doc = await buildNestingPdf('report', aud, trace);
+    out[aud] = { text: trace.join(' | '), links: (doc.output().match(/\/Subtype \/Link/g) || []).length, pages: doc.getNumberOfPages() };
+  }
+  // Big job under a deliberately tiny time budget: still a complete,
+  // valid result, and the report says the search was cut short.
+  const saved = SEARCH_BUDGET_MS[2];
+  SEARCH_BUDGET_MS[2] = 60;
+  try {
+    parts = Array.from({ length: 12 }, (_, i) => ({ id: nextId(), name: 'B' + i, width: 3 + i, height: 2 + (i % 5), qty: 35, rotate: true, color: null }));
+    sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 100 }, { id: nextId(), name: '60x120', width: 120, height: 60, qty: null, cost: 160 }];
+    qualitySlider.value = '2';
+    saveWorkingIntoCurrentProject(); render(); runNesting();
+    const r = strategyResults[selectedStrategyKey];
+    out.big = { complete: r.bins.reduce((a, b) => a + b.placements.length, 0) + r.unplaced.length === 420,
+                note: (document.getElementById('searchNote') || {}).textContent || '' };
+  } finally { SEARCH_BUDGET_MS[2] = saved; }
+  document.getElementById('markupPct').value = '';
+  ['cutSpeed', 'pierceSec', 'laserRate'].forEach(id => document.getElementById(id).value = '');
+  saveWorkingIntoCurrentProject();
+  return out;
+});
+console.log(JSON.stringify({ nest: ex.nest, costs: ex.costs, afterTry: ex.afterTry, big: ex.big, links: [ex.internal.links, ex.shop.links, ex.customer.links] }));
+check(ex.nest.sheets === 2 && ex.nest.unplaced === 1 && ex.nest.strategies > 0 && /Monster/.test(ex.oversizedNote),
+  'a part too big for every sheet is held back and named; everything else still nests');
+check(/No better layout/.test(ex.afterTry.note) && ex.afterTry.unplaced === 1, 'Try harder does not count the held-back part as an improvement');
+// 2 sheets x $40 = $80; 588 in / 200 + 14 s = 3.1733 min x $120/h = $6.3467; x 1.35
+check(ex.costs.material === 80 && ex.costs.cutting === 6.35 && ex.costs.quote === 116.57 && ex.quoteOnScreen,
+  `customer quote = (material + cutting) x markup: ($80 + $6.35) x 1.35 = $${ex.costs.quote.toFixed(2)}`);
+// The customer's price lines must add up to the printed total, to the cent.
+const priceBlock = ex.customer.text.split('| Price |')[1].split('| Total |');
+const lineSum = (priceBlock[0].match(/\$[\d,]+\.\d\d/g) || []).reduce((a, v) => a + Math.round(parseFloat(v.slice(1).replace(/,/g, '')) * 100), 0);
+const printedTotal = Math.round(parseFloat(priceBlock[1].match(/\$([\d,]+\.\d\d)/)[1].replace(/,/g, '')) * 100);
+check(lineSum === printedTotal, `customer price lines add up to the total ($${(lineSum / 100).toFixed(2)} = $${(printedTotal / 100).toFixed(2)})`);
+const has = (t, ...w) => w.every(x => t.includes(x)), lacks = (t, ...w) => w.every(x => !t.includes(x));
+check(has(ex.internal.text, 'Costs', 'Laser cutting', 'Markup 35%', 'Customer quote', '$116.57', 'EFFICIENCY', 'Monster'),
+  'internal PDF: full cost breakdown, efficiency and warnings');
+check(has(ex.customer.text, 'Quotation', 'QUOTE TOTAL', '$116.57', 'Not included in this quote: Monster x 1', '2 | PART TYPES')
+  && lacks(ex.customer.text, 'Markup', 'MARKUP', 'EFFICIENCY', 'Cut order', '$80.00', '#1', 'Sheet 1', 'Monster (') && ex.customer.pages === 1 && ex.customer.links === 0,
+  'customer PDF: price and parts only - no markup, efficiency, internal cost, tags or sheets');
+check(has(ex.shop.text, 'Cut sheets', 'Material to pull', 'Cut order', 'Back to summary', 'Sheet 1 of 2') && lacks(ex.shop.text, '$', 'Markup', 'EFFICIENCY'),
+  'shop PDF: cut sheets, material to pull and cut order - no prices anywhere');
+check(has(ex.shop.text, 'not to scale') && has(ex.internal.text, 'not to scale') && lacks(ex.customer.text, 'not to scale'), 'shop and internal PDFs say drawings are not to scale');
+check(has(ex.internal.text, '| Material |', 'Used'), 'internal PDF keeps the material breakdown (Report sections > Material breakdown)');
+check(ex.shop.links === 4 && ex.internal.links === 4, 'sheet index rows and "Back to summary" are live links (2 + 2)');
+check(ex.big.complete && /compared \d+ of \d+ candidate layouts/.test(ex.big.note), 'big job under a time budget: complete result, and the report says the search was cut short');
+
 // The PDF path draws the same sheets through drawSheet(); make sure it still builds.
 const pdfBytes = await page.evaluate(async () => {
   sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 100 }];
