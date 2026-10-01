@@ -19,7 +19,7 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Openings editor (✎ in the parts-list Fill column): "Make frame" rail preset, custom rectangles, live preview
 - [x] Validation: inside the part, no overlaps (touching is fine), max 16; Save disabled while invalid
 - [x] Re-fit stale openings after a resize from the editor (no DXF re-import needed)
-- [x] Paste rows: optional 5th value = frame rail width (`Frame, 30, 20, 2, 1.5`)
+- [x] Paste rows: optional 5th value `rail N` = frame rail width (`Frame, 30, 20, 2, rail 1.5`)
 - [x] Tests extended to 25 checks (paste, editor via UI, validation, re-fit, JSON round-trip)
 
 ## Done — Global openings switch (2026-10-01)
@@ -28,6 +28,15 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Strategy table gets a "Without openings" column when there is something to compare
 - [x] Never worse: every packing attempt also runs with openings empty, best of both wins (scored on the same material count)
 - [x] Tests: saving text, switch off, persistence, table column, never-worse (30 checks)
+
+## Done — Review hardening (2026-10-01)
+- [x] "Without openings" comparison now comes from the same search (best openings-empty layout), so it can never beat the result; no second full nest
+- [x] Try harder searches the openings-empty twin too, so its gains aren't credited to openings
+- [x] Paste rows: frame only with an explicit `rail N` 5th value (a numeric thickness/price column is ignored)
+- [x] An empty frame interior is never offered as a reusable sheet remnant
+- [x] Imported openings need their measured size (else dropped); `"false"` stays off; editor save keeps an unticked Fill
+- [x] Openings can't span a part's full width/height; min opening 0 means the 0.25" floor
+- [x] Seeded random-job stress test (40 jobs: geometry, part counts, stock limits, Rot, honest comparison); 40 checks
 
 ## Next candidates
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants

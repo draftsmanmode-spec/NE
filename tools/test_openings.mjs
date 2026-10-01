@@ -232,15 +232,19 @@ if (shotDir){
 const pasted = await page.evaluate(() => {
   parts = []; sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
   saveWorkingIntoCurrentProject(); render();
-  document.getElementById('bulkPaste').value = 'Window frame, 30, 20, 2, 2\nTab, 6, 5, 10';
+  document.getElementById('bulkPaste').value = 'Window frame, 30, 20, 2, rail 2\nTab, 6, 5, 10\nShelf, 24, 18, 1, 0.75';
   document.getElementById('parseBulk').click();
   const fr = parts.find(p => p.name === 'Window frame');
+  const shelf = parts.find(p => p.name === 'Shelf').openings;
+  parts = parts.filter(p => p.name !== 'Shelf');   // only here to test the paste
+  saveWorkingIntoCurrentProject(); render();
   runNesting();
   const s = strategyResults[selectedStrategyKey];
-  return { openings: fr.openings, plain: parts.find(p => p.name === 'Tab').openings, sheets: s.sheets, nested: countNestedInOpenings(s.bins) };
+  return { openings: fr.openings, plain: parts.find(p => p.name === 'Tab').openings, shelf, sheets: s.sheets, nested: countNestedInOpenings(s.bins) };
 });
 check(JSON.stringify(pasted.openings) === JSON.stringify([{ x: 2, y: 2, w: 26, h: 16 }]) && pasted.plain === undefined,
-  'pasted "name, w, h, qty, rail" becomes a frame; 4-column rows stay plain');
+  'pasted "name, w, h, qty, rail 2" becomes a frame; 4-column rows stay plain');
+check(pasted.shelf === undefined, 'a bare numeric 5th column (e.g. thickness) does not make a frame');
 check(pasted.sheets === 2 && pasted.nested === 10, `pasted frames carry the tabs (${pasted.sheets} sheets, ${pasted.nested} nested)`);
 
 // Editor, driven through the UI: a plain part becomes a frame.
@@ -289,6 +293,116 @@ const roundTrip = await page.evaluate(() => {
   return partOpenings(p).length === 1 && p.openingsBase.w === 44;
 });
 check(roundTrip, 'openings survive export/import');
+
+// ---- regressions from code review ---------------------------------
+const rv = await page.evaluate(async () => {
+  const out = {};
+  // An empty frame interior is not offered as a sheet remnant.
+  parts = [{ id: nextId(), name: 'Big frame', width: 40, height: 30, qty: 1, rotate: true, color: null }];
+  setPartOpenings(parts[0], [frameOpening(40, 30, 2)]);
+  sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 100 }];
+  document.getElementById('fillOpenings').checked = true;
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const bins = strategyResults[selectedStrategyKey].bins;
+  out.openingFree = bins[0].freeRects.some(r => r.inOpening);
+  out.remnantInFrame = findRemnants(bins, 6).some(r => Math.abs(r.w - 35.75) < 0.01 && Math.abs(r.h - 25.75) < 0.01);
+  // Imported openings without the size they were measured at are dropped;
+  // the string "false" stays off.
+  const noBase = sanitizeImportedPart({ name: 'x', width: 30, height: 20, qty: 1, openings: [{ x: 2, y: 2, w: 26, h: 16 }] }, 0);
+  const strOff = sanitizeImportedPart({ name: 'y', width: 30, height: 20, qty: 1, openings: [{ x: 2, y: 2, w: 26, h: 16 }], openingsBase: { w: 30, h: 20 }, useOpenings: 'false' }, 0);
+  out.noBaseDropped = noBase.openings === undefined && partOpenings(noBase).length === 0;
+  out.strOff = strOff.useOpenings === false && partOpenings(strOff).length === 0;
+  // Saving in the editor keeps a deliberately unticked Fill box unticked.
+  parts[0].useOpenings = false;
+  setPartOpenings(parts[0], [frameOpening(40, 30, 3)]);
+  out.keptOff = parts[0].useOpenings === false && parts[0].openings[0].w === 34;
+  // An opening across the whole part is refused.
+  out.fullSpan = /full width/.test(validateOpenings([{ x: 0, y: 5, w: 40, h: 10 }], 40, 30));
+  // Try harder: the comparison is searched as hard as the result, so it
+  // never ends up claiming openings cost a sheet.
+  parts = [{ id: nextId(), name: 'Frame', width: 30, height: 20, qty: 2, rotate: true, color: null },
+           { id: nextId(), name: 'Tab', width: 6, height: 5, qty: 10, rotate: true, color: null }];
+  setPartOpenings(parts[0], [frameOpening(30, 20, 2)]);
+  sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  tryHarder(0.25, 0.5, 2);
+  await new Promise(r => setTimeout(r, 1500));
+  const s = strategyResults[selectedStrategyKey];
+  out.afterTry = { sheets: s.sheets, base: s.noOpenings && s.noOpenings.sheets };
+  out.neverNegative = Object.values(strategyResults).every(r => !r.noOpenings || r.noOpenings.costScore >= costScore(r, sheetTypes));
+  return out;
+});
+console.log(JSON.stringify(rv));
+check(rv.openingFree && !rv.remnantInFrame, 'an empty frame interior is not listed as a reusable sheet remnant');
+check(rv.noBaseDropped && rv.strOff, 'imported openings need their measured size; "false" stays off');
+check(rv.keptOff, 'editor save keeps an unticked Fill box unticked');
+check(rv.fullSpan, 'an opening spanning the full width is refused');
+check(rv.afterTry.sheets === 2 && rv.afterTry.base === 3 && rv.neverNegative, `after Try harder the comparison stays honest (${rv.afterTry.sheets} vs ${rv.afterTry.base} without)`);
+
+// "Smallest useful opening" of 0 means the 0.25" floor, not the 1" default.
+await page.evaluate(() => { dxfOpenModal(); document.getElementById('dxfMinOpening').value = '0'; });
+await page.setInputFiles('#dxfFileInput', paths.filter(p => /Bracket/.test(p)));
+await page.waitForFunction(() => dxfReviewRows.length >= 1);
+const tiny = await page.evaluate(() => { const r = dxfReviewRows[0]; document.getElementById('dxfModal').classList.remove('open'); return r.openings.length; });
+check(tiny > 0, `min opening 0 keeps small cut-outs (bracket holes found: ${tiny})`);
+
+// ---- randomised jobs (seeded, so a failure is reproducible) ------------
+// Random sheets, stock limits, gaps, rotation and frames; every strategy of
+// every job must be geometrically sound and account for every part.
+const fuzz = await page.evaluate(() => {
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const realRandom = Math.random;
+  Math.random = rnd;
+  const pick = (a, b) => a + rnd() * (b - a);
+  const q16 = v => Math.round(v * 16) / 16;
+  const report = { jobs: 0, strategies: 0, problems: [], nested: 0, saved: 0, slowestMs: 0 };
+  try {
+    for (let job = 0; job < 40; job++){
+      sheetTypes = Array.from({ length: 1 + Math.floor(rnd() * 3) }, (_, i) => ({
+        id: nextId(), name: 'S' + i, width: q16(pick(36, 96)), height: q16(pick(24, 60)),
+        qty: rnd() < 0.3 ? 1 + Math.floor(rnd() * 3) : null, cost: rnd() < 0.8 ? Math.round(pick(30, 200)) : null }));
+      parts = Array.from({ length: 2 + Math.floor(rnd() * 6) }, (_, i) => ({
+        id: nextId(), name: 'P' + i, width: q16(pick(2, 34)), height: q16(pick(2, 22)),
+        qty: 1 + Math.floor(rnd() * 8), rotate: rnd() < 0.7, color: null }));
+      parts.forEach(p => { if (rnd() < 0.35){ const f = frameOpening(p.width, p.height, q16(pick(0.75, 4))); if (f) setPartOpenings(p, [f]); } });
+      const gap = q16(pick(0, 0.5)), border = q16(pick(0, 1));
+      document.getElementById('partGap').value = gap;
+      document.getElementById('borderGap').value = border;
+      document.getElementById('fillOpenings').checked = rnd() < 0.85;
+      qualitySlider.value = String(Math.floor(rnd() * 3));
+      saveWorkingIntoCurrentProject(); render();
+      const t = performance.now();
+      runNesting();
+      report.slowestMs = Math.max(report.slowestMs, performance.now() - t);
+      report.jobs++;
+      const requested = parts.reduce((a, p) => a + p.qty, 0);
+      Object.entries(strategyResults).forEach(([k, r]) => {
+        report.strategies++;
+        const placed = r.bins.reduce((a, b) => a + b.placements.length, 0);
+        if (placed + r.unplaced.length !== requested) report.problems.push(`job ${job} ${k}: ${placed}+${r.unplaced.length} != ${requested}`);
+        if (r.efficiency > 100 + 1e-6) report.problems.push(`job ${job} ${k}: efficiency ${r.efficiency}`);
+        if (r.noOpenings && r.noOpenings.costScore < costScore(r, sheetTypes) - 1e-6) report.problems.push(`job ${job} ${k}: comparison beats result`);
+        const use = {}; r.bins.forEach(b => use[b.sheetType.id] = (use[b.sheetType.id] || 0) + 1);
+        sheetTypes.forEach(st => { if (st.qty != null && (use[st.id] || 0) > st.qty) report.problems.push(`job ${job} ${k}: stock exceeded on ${st.name}`); });
+        r.bins.forEach(b => b.placements.forEach(p => {
+          const def = parts.find(d => d.id === p.defId);
+          if (p.rotated && def && !def.rotate) report.problems.push(`job ${job} ${k}: ${p.name} rotated but Rot is off`);
+        }));
+        report.nested += countNestedInOpenings(r.bins);
+        const sv = openingsSaving(r); if (sv && sv.sheetsSaved > 0) report.saved += sv.sheetsSaved;
+        report.bins = (report.bins || []).concat([{ gap, border, bins: r.bins.map(b => ({ w: b.w, h: b.h, placements: b.placements })) }]);
+      });
+    }
+  } finally { Math.random = realRandom; }
+  return report;
+});
+const fuzzGeom = fuzz.bins.every(j => geometryOk(j.bins, j.gap, j.border));
+console.log(`fuzz: ${fuzz.jobs} jobs, ${fuzz.strategies} strategies, ${fuzz.nested} parts nested, ${fuzz.saved} sheets saved, slowest ${Math.round(fuzz.slowestMs)} ms`);
+fuzz.problems.slice(0, 10).forEach(p => console.log('  ' + p));
+check(fuzz.problems.length === 0, `random jobs: every part accounted for, stock limits and Rot respected, comparison honest (${fuzz.problems.length} problems)`);
+check(fuzzGeom, 'random jobs: no overlaps, gaps and borders kept, nested parts inside their openings');
+check(fuzz.slowestMs < 3000, `random jobs: slowest nest ${Math.round(fuzz.slowestMs)} ms`);
 
 // The PDF path draws the same sheets through drawSheet(); make sure it still builds.
 const pdfBytes = await page.evaluate(async () => {

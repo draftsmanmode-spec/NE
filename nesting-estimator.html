@@ -659,7 +659,7 @@
         </div>
         <input type="file" id="dxfFileInput" accept=".dxf" multiple style="display:none">
         <div style="margin-top:16px;">
-          <label class="small">Paste rows &mdash; one part per line: <code>name, width, height, qty</code>, optionally <code>, rail</code> for a frame<span class="hint" tabindex="0">?<span class="hint-bubble">A 5th value makes the part a frame with rails that wide, so smaller parts can be nested in its opening. <code>Frame, 30, 20, 2, 1.5</code> = a 30 x 20 frame with 1.5" rails.</span></span></label>
+          <label class="small">Paste rows &mdash; one part per line: <code>name, width, height, qty</code>, optionally <code>, rail 1.5</code> for a frame<span class="hint" tabindex="0">?<span class="hint-bubble">A 5th value of <code>rail N</code> makes the part a frame with rails N" wide, so smaller parts can be nested in its opening. <code>Frame, 30, 20, 2, rail 1.5</code> = two 30 x 20 frames with 1.5" rails. Any other 5th value is ignored.</span></span></label>
           <textarea id="bulkPaste" placeholder="Shelf side, 24, 18, 12&#10;Back panel, 30, 20, 6"></textarea>
           <div class="row-actions">
             <button id="parseBulk">Add pasted rows</button>
@@ -1252,7 +1252,10 @@ document.getElementById('parseBulk').addEventListener('click', ()=>{
       rotate: rot,
       color: null
     };
-    const frame = frameOpening(part.width, part.height, parseFloat(rail));
+    // Only an explicit "rail 1.5" (or "frame 1.5") makes a frame, so an extra
+    // numeric column from a spreadsheet (thickness, price) is never misread.
+    const railMatch = /^(?:rail|frame)\s*[:=]?\s*(\d*\.?\d+)\s*(?:"|in)?$/i.exec(rail || '');
+    const frame = railMatch ? frameOpening(part.width, part.height, parseFloat(railMatch[1])) : null;
     if (frame) setPartOpenings(part, [frame]);
     parts.push(part);
   });
@@ -2021,12 +2024,13 @@ function dxfFindOpenings(runs, bbox, minDim, snap){
    DXF is re-imported. */
 function openingsMatchDims(p){
   const b = p.openingsBase;
-  return !b || (Math.abs(b.w - p.width) < 1e-6 && Math.abs(b.h - p.height) < 1e-6);
+  return !!b && Math.abs(b.w - p.width) < 1e-6 && Math.abs(b.h - p.height) < 1e-6;
 }
 function partOpenings(p){
   if (!p || p.useOpenings === false || !Array.isArray(p.openings) || !p.openings.length) return [];
   if (!openingsMatchDims(p)) return [];
-  return p.openings.filter(o => o.x >= -1e-9 && o.y >= -1e-9 && o.x+o.w <= p.width+1e-9 && o.y+o.h <= p.height+1e-9);
+  return p.openings.filter(o => o.x >= -1e-9 && o.y >= -1e-9 && o.x+o.w <= p.width+1e-9 && o.y+o.h <= p.height+1e-9
+    && o.w < p.width - 1e-9 && o.h < p.height - 1e-9);
 }
 function sanitizeOpenings(list){
   if (!Array.isArray(list)) return undefined;
@@ -2044,7 +2048,7 @@ function fillCellHtml(p, editable){
   let body;
   if (!n) body = editable ? '' : '<span class="fill-none">&mdash;</span>';
   else if (!openingsMatchDims(p)){
-    body = `<span class="fill-stale" title="${escAttr(`Size changed since these openings were set (was ${p.openingsBase.w}" x ${p.openingsBase.h}"), so its ${n} opening${n===1?'':'s'} are ignored. Click the pencil to re-fit them, or re-import the DXF.`)}">&#9888;</span>`;
+    body = `<span class="fill-stale" title="${escAttr(`Size changed since these openings were set${p.openingsBase ? ` (was ${p.openingsBase.w}" x ${p.openingsBase.h}")` : ''}, so its ${n} opening${n===1?'':'s'} are ignored. Click the pencil to re-fit them, or re-import the DXF.`)}">&#9888;</span>`;
   } else {
     const sizes = p.openings.map(o => o.w.toFixed(2) + '" x ' + o.h.toFixed(2) + '"').join(', ');
     body = `<label class="fill-tog" title="${escAttr(`${n} opening${n===1?'':'s'}: ${sizes}. Ticked: smaller parts may be nested inside.`)}"><input type="checkbox" data-fill ${p.useOpenings!==false?'checked':''}><span>${n}</span></label>`;
@@ -2134,7 +2138,8 @@ function dxfReadFile(file){
       const clusters = split ? dxfClusterRuns(active, 0.05) : [{ pts: active.flatMap(r=>r.pts), bbox: null, runs: active }];
       const round = document.getElementById('dxfRoundSixteenth').checked;
       const detect = document.getElementById('dxfDetectOpenings').checked;
-      const minOpening = Math.max(0.25, parseFloat(document.getElementById('dxfMinOpening').value) || 1);
+      const minRaw = parseFloat(document.getElementById('dxfMinOpening').value);
+      const minOpening = Math.max(0.25, isNaN(minRaw) ? 1 : minRaw);
       const baseName = file.name.replace(/\.dxf$/i, '');
 
       clusters.forEach((cl, i) => {
@@ -2263,10 +2268,12 @@ function frameOpening(w, h, rail){
   return { x: rail, y: rail, w: +(w - 2*rail).toFixed(4), h: +(h - 2*rail).toFixed(4) };
 }
 function setPartOpenings(part, list){
+  // Editing openings must not quietly re-tick a Fill box someone unticked.
+  const wasOff = part.useOpenings === false && Array.isArray(part.openings) && part.openings.length > 0;
   if (list.length){
     part.openings = list.map(o => ({ x:+o.x.toFixed(4), y:+o.y.toFixed(4), w:+o.w.toFixed(4), h:+o.h.toFixed(4) }));
     part.openingsBase = { w: part.width, h: part.height };
-    part.useOpenings = true;
+    part.useOpenings = !wasOff;
   } else {
     delete part.openings; delete part.openingsBase; delete part.useOpenings;
   }
@@ -2278,9 +2285,9 @@ function validateOpenings(list, W, H){
     if (![o.x, o.y, o.w, o.h].every(v => typeof v === 'number' && isFinite(v))) return `Opening ${n}: fill in all four numbers.`;
     if (!(o.w > 0 && o.h > 0)) return `Opening ${n}: width and height must be greater than 0.`;
     if (o.x < 0 || o.y < 0 || o.x + o.w > W + 1e-9 || o.y + o.h > H + 1e-9) return `Opening ${n} runs outside the ${W}" x ${H}" part.`;
+    if (o.w >= W - 1e-9 || o.h >= H - 1e-9) return `Opening ${n} spans the full ${o.w >= W - 1e-9 ? 'width' : 'height'} of the part, which would cut it in two.`;
     for (let j = 0; j < i; j++){
-      const q = list[j];
-      if (o.x < q.x + q.w - 1e-9 && q.x < o.x + o.w - 1e-9 && o.y < q.y + q.h - 1e-9 && q.y < o.y + o.h - 1e-9) return `Openings #${j+1} and ${n} overlap.`;
+      if (rectsIntersect(o, list[j])) return `Openings #${j+1} and ${n} overlap.`;
     }
   }
   if (list.length > DXF_MAX_OPENINGS) return `At most ${DXF_MAX_OPENINGS} openings per part.`;
@@ -2425,10 +2432,11 @@ function splitFreeRects(freeRects, px, py, pw, ph){
     const fr = freeRects[i];
     if (!rectsIntersect(fr, placedRect)) continue;
     freeRects.splice(i,1);
-    if (placedRect.x > fr.x+1e-9) newRects.push({x:fr.x, y:fr.y, w:placedRect.x-fr.x, h:fr.h});
-    if (placedRect.x+placedRect.w < fr.x+fr.w-1e-9) newRects.push({x:placedRect.x+placedRect.w, y:fr.y, w:(fr.x+fr.w)-(placedRect.x+placedRect.w), h:fr.h});
-    if (placedRect.y > fr.y+1e-9) newRects.push({x:fr.x, y:fr.y, w:fr.w, h:placedRect.y-fr.y});
-    if (placedRect.y+placedRect.h < fr.y+fr.h-1e-9) newRects.push({x:fr.x, y:placedRect.y+placedRect.h, w:fr.w, h:(fr.y+fr.h)-(placedRect.y+placedRect.h)});
+    const keep = r => (fr.inOpening ? Object.assign(r, { inOpening: true }) : r);
+    if (placedRect.x > fr.x+1e-9) newRects.push(keep({x:fr.x, y:fr.y, w:placedRect.x-fr.x, h:fr.h}));
+    if (placedRect.x+placedRect.w < fr.x+fr.w-1e-9) newRects.push(keep({x:placedRect.x+placedRect.w, y:fr.y, w:(fr.x+fr.w)-(placedRect.x+placedRect.w), h:fr.h}));
+    if (placedRect.y > fr.y+1e-9) newRects.push(keep({x:fr.x, y:fr.y, w:fr.w, h:placedRect.y-fr.y}));
+    if (placedRect.y+placedRect.h < fr.y+fr.h-1e-9) newRects.push(keep({x:fr.x, y:placedRect.y+placedRect.h, w:fr.w, h:(fr.y+fr.h)-(placedRect.y+placedRect.h)}));
   }
   for (const r of newRects){ if (r.w>1e-6 && r.h>1e-6) freeRects.push(r); }
   pruneFreeRects(freeRects);
@@ -2440,7 +2448,8 @@ function splitFreeRects(freeRects, px, py, pw, ph){
    dropped into an opening keeps a full part gap from every cut edge. */
 function addOpeningFreeRects(freeRects, pl, partGap){
   pl.openings.forEach(o => {
-    const r = { x: pl.x + o.x + partGap, y: pl.y + o.y + partGap, w: o.w - partGap, h: o.h - partGap };
+    // inOpening: space inside a part, so it is never offered as a sheet remnant.
+    const r = { x: pl.x + o.x + partGap, y: pl.y + o.y + partGap, w: o.w - partGap, h: o.h - partGap, inOpening: true };
     if (r.w > 1e-6 && r.h > 1e-6) freeRects.push(r);
   });
 }
@@ -2552,17 +2561,21 @@ const sortStrategies = [
   (a,b)=> b.h-a.h || b.w-a.w,
   (a,b)=> Math.min(b.w,b.h)-Math.min(a.w,a.h),
 ];
-function scoreResult(res, sheetTypesIn){
-  const totalArea = res.bins.reduce((s,b)=>s+b.w*b.h,0);
-  const usedArea = res.bins.reduce((s,b)=>s+b.placements.reduce((s2,p)=>s2+placedArea(p),0),0);
-  const waste = totalArea - usedArea;
+// What a result costs: unplaced parts first, then $ (or sheet count when
+// prices are missing). No area tie-break - see scoreResult.
+function costScore(res, sheetTypesIn){
   // If every sheet type has a price, compare total $ spent (a mix of cheaper/smaller
   // sheets can beat fewer-but-pricier sheets). Otherwise fall back to sheet count.
   const costKnown = sheetTypesIn.length>0 && sheetTypesIn.every(st=> st.cost!=null);
   const costTier = costKnown
     ? res.bins.reduce((s,b)=> s + (b.sheetType.cost||0), 0)
     : res.bins.length;
-  return res.unplaced.length*1e12 + costTier*1e6 + waste;
+  return res.unplaced.length*1e12 + costTier*1e6;
+}
+function scoreResult(res, sheetTypesIn){
+  const totalArea = res.bins.reduce((s,b)=>s+b.w*b.h,0);
+  const usedArea = res.bins.reduce((s,b)=>s+b.placements.reduce((s2,p)=>s2+placedArea(p),0),0);
+  return costScore(res, sheetTypesIn) + (totalArea - usedArea);
 }
 
 /* Different priority orders in which to reach for sheet types when a new
@@ -2612,14 +2625,11 @@ function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, opti
 
   // The packer is greedy, so filling an opening early can, rarely, crowd a
   // later part out. Every attempt is therefore also run with openings left
-  // empty, and the best of both wins: using openings can never cost a sheet.
-  if (units.some(u=> u.openings && u.openings.length)){
-    // holeArea keeps the material count identical to the filled variant, so
-    // the two only differ where it matters: sheets, cost, unplaced.
-    const plain = new Map(units.map(u=> [u, (u.openings && u.openings.length)
-      ? Object.assign({}, u, { openings: [], holeArea: u.openings.reduce((a, o)=> a + o.w*o.h, 0) }) : u]));
-    attempts.slice().forEach(a=> attempts.push({ order: a.order.map(u=> plain.get(u)), rule: a.rule }));
-  }
+  // empty ("plain"), and the best of both wins: using openings can never
+  // cost a sheet. The best plain layout is also the report's "without
+  // openings" comparison - found in the same search, so it can't beat the
+  // result by luck of a different random shuffle.
+  if (hasOpenings(units)) attempts.slice().forEach(a=> attempts.push({ order: a.order.map(plainUnit), rule: a.rule, plain: true }));
 
   // "Optimize sheet mix": also try several sheet-type priority orders (not
   // just the order they're listed in) and keep whichever combination scores
@@ -2627,14 +2637,46 @@ function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, opti
   // and with several it's the slower, more thorough pass.
   const sheetOrders = optimizeMix ? sheetOrderVariants(sheetTypesIn) : [sheetTypesIn];
 
-  let best = null;
+  let best = null, bestScore = Infinity, bestPlain = null, bestPlainScore = Infinity;
   for (const sheetOrder of sheetOrders){
     for (const a of attempts){
       const res = packSheetsOnce(sheetOrder, a.order, partGap, borderGap, a.rule);
-      if (!best || scoreResult(res, sheetTypesIn) < scoreResult(best, sheetTypesIn)) best = res;
+      const sc = scoreResult(res, sheetTypesIn);
+      if (sc < bestScore){ best = res; bestScore = sc; }
+      if (a.plain && sc < bestPlainScore){ bestPlain = res; bestPlainScore = sc; }
     }
   }
+  if (best) best.plainBest = bestPlain;
   return best;
+}
+function hasOpenings(units){ return units.some(u=> u.openings && u.openings.length); }
+// A unit's openings-empty twin. holeArea keeps its material count equal to
+// the filled twin's, so the two only differ where it matters: sheets, cost,
+// unplaced.
+function plainUnit(u){
+  return (u.openings && u.openings.length)
+    ? Object.assign({}, u, { openings: [], holeArea: u.openings.reduce((a, o)=> a + o.w*o.h, 0) }) : u;
+}
+function withOpeningsOff(fn){
+  const was = nestOpeningsEnabled;
+  nestOpeningsEnabled = false;
+  try { return fn(); } finally { nestOpeningsEnabled = was; }
+}
+function baselineStats(res, sheetTypesIn){
+  const st = strategyStats(res.bins, res.unplaced);
+  return { sheets: st.sheets, cost: st.cost, costKnown: st.costKnown, unplacedCount: st.unplacedCount, costScore: costScore(res, sheetTypesIn) };
+}
+/* Rightsize a packed result and settle its "without openings" comparison.
+   The plain layout is rightsized with openings off so it stays plain; if
+   that tips it ahead on cost, it simply becomes the result. */
+function finishStrategy(res, sheetTypesIn, partsIn, partGap, borderGap){
+  rightsizeBins(res.bins, sheetTypesIn, partsIn, partGap, borderGap, res.usage || {});
+  const plain = res.plainBest || null;
+  if (plain && plain !== res){
+    withOpeningsOff(()=> rightsizeBins(plain.bins, sheetTypesIn, partsIn, partGap, borderGap, plain.usage || {}));
+    if (costScore(plain, sheetTypesIn) < costScore(res, sheetTypesIn)) res = plain;
+  }
+  return { result: res, noOpenings: plain ? baselineStats(plain, sheetTypesIn) : null };
 }
 
 /* Runs N additional RANDOMIZED attempts (shuffled part orderings × all
@@ -2673,6 +2715,8 @@ function packMoreAttempts(sheetTypesIn, partsIn, partGap, borderGap, currentBest
   let best = currentBest;
   let improved = false;
   let bestScore = scoreResult(currentBest, sheetTypesIn);
+  const twins = hasOpenings(units);
+  let bestPlain = null, bestPlainScore = Infinity;
 
   // A valid base to perturb only exists if the current best actually placed
   // every part (nothing unplaced) — otherwise local search has no sound
@@ -2696,8 +2740,14 @@ function packMoreAttempts(sheetTypesIn, partsIn, partGap, borderGap, currentBest
     const res = packSheetsOnce(sheetOrder, order, partGap, borderGap, rule);
     const sc = scoreResult(res, sheetTypesIn);
     if (sc < bestScore - 1e-6){ best = res; bestScore = sc; improved = true; }
+    if (twins){
+      const pres = packSheetsOnce(sheetOrder, order.map(plainUnit), partGap, borderGap, rule);
+      const psc = scoreResult(pres, sheetTypesIn);
+      if (psc < bestPlainScore){ bestPlain = pres; bestPlainScore = psc; }
+      if (psc < bestScore - 1e-6){ best = pres; bestScore = psc; improved = true; }
+    }
   }
-  return { result: best, improved };
+  return { result: best, improved, plainBest: bestPlain };
 }
 
 /* =====================================================================
@@ -2790,6 +2840,7 @@ function findRemnants(bins, minDim){
   bins.forEach((bin, i)=>{
     let largest = null;
     bin.freeRects.forEach(fr=>{
+      if (fr.inOpening) return; // inside a frame: a drop-out, not sheet stock
       if (fr.w>=minDim && fr.h>=minDim && (!largest || fr.w*fr.h > largest.w*largest.h)) largest = fr;
     });
     if (largest){
@@ -3033,19 +3084,17 @@ function computeAllStrategies(partGap, borderGap, quality, sheetTypesForNesting)
 
   validSheets.forEach(st=>{
     if (!isViableAlone(st, parts, partGap, borderGap)) return;
-    const res = packSheetsBest([st], parts, partGap, borderGap, quality, false);
-    rightsizeBins(res.bins, [st], parts, partGap, borderGap, res.usage);
+    const { result: res, noOpenings } = finishStrategy(packSheetsBest([st], parts, partGap, borderGap, quality, false), [st], parts, partGap, borderGap);
     strategyResults['single:'+st.id] = Object.assign(
-      { label: st.name, bins: res.bins, unplaced: res.unplaced },
+      { label: st.name, bins: res.bins, unplaced: res.unplaced, noOpenings },
       strategyStats(res.bins, res.unplaced)
     );
   });
 
   if (validSheets.length > 1){
-    const res = packSheetsBest(validSheets, parts, partGap, borderGap, quality, true);
-    rightsizeBins(res.bins, validSheets, parts, partGap, borderGap, res.usage);
+    const { result: res, noOpenings } = finishStrategy(packSheetsBest(validSheets, parts, partGap, borderGap, quality, true), validSheets, parts, partGap, borderGap);
     strategyResults['mixed'] = Object.assign(
-      { label: 'Optimized mix (all sheet types)', bins: res.bins, unplaced: res.unplaced },
+      { label: 'Optimized mix (all sheet types)', bins: res.bins, unplaced: res.unplaced, noOpenings },
       strategyStats(res.bins, res.unplaced)
     );
   }
@@ -3114,19 +3163,11 @@ function runNesting(){
     return;
   }
 
-  // With openings on, first nest the same job with them switched off, so the
-  // report can say exactly what they saved (sheets are what cost money).
+  // With openings on, each strategy also carries its best openings-empty
+  // layout (noOpenings), so the report can say what they saved.
   const fillOpenings = document.getElementById('fillOpenings').checked;
-  let baseline = null;
-  if (fillOpenings && parts.some(p=> p.qty>0 && partOpenings(p).length)){
-    nestOpeningsEnabled = false;
-    computeAllStrategies(partGap, borderGap, quality, validSheetTypesForNesting);
-    baseline = {};
-    Object.entries(strategyResults).forEach(([k, r])=>{ baseline[k] = { sheets:r.sheets, cost:r.cost, costKnown:r.costKnown, unplacedCount:r.unplacedCount }; });
-  }
   nestOpeningsEnabled = fillOpenings;
   const sortedKeys = computeAllStrategies(partGap, borderGap, quality, validSheetTypesForNesting);
-  if (baseline) sortedKeys.forEach(k=>{ if (baseline[k]) strategyResults[k].noOpenings = baseline[k]; });
   if (sortedKeys.length===0){
     lastNestResult = null;
     results.innerHTML = invalidNote + '<div class="warning-box"><b>None of your sheet sizes can hold every part.</b> Add a bigger sheet type, or check whether a part\'s dimensions are larger than any sheet you\'ve defined.</div>';
@@ -3185,12 +3226,22 @@ function tryHarder(partGap, borderGap, quality){
     const EXTRA = 60;
     nestOpeningsEnabled = !lastRunParams || lastRunParams.fillOpenings !== false;
     const currentBest = { bins: s.bins, unplaced: s.unplaced };
-    const { result, improved } = packMoreAttempts(strategySheets, parts, partGap, borderGap, currentBest, EXTRA);
+    const { result, improved, plainBest } = packMoreAttempts(strategySheets, parts, partGap, borderGap, currentBest, EXTRA);
+    const target = strategyResults[startStrategyKey];
+    let main = result, better = improved, baselineChanged = false;
+    if (improved) rightsizeBins(main.bins, strategySheets, parts, partGap, borderGap, main.usage || {});
+    // The extra search ran with openings empty too, so the comparison gets
+    // the same effort: a Try-harder gain is not credited to the openings.
+    if (plainBest && target.noOpenings){
+      if (plainBest !== main) withOpeningsOff(()=> rightsizeBins(plainBest.bins, strategySheets, parts, partGap, borderGap, plainBest.usage || {}));
+      const cand = baselineStats(plainBest, strategySheets);
+      if (cand.costScore < target.noOpenings.costScore){ target.noOpenings = cand; baselineChanged = true; }
+      if (plainBest !== main && costScore(plainBest, strategySheets) < costScore(main, strategySheets)){ main = plainBest; better = true; }
+    }
 
-    if (improved){
-      rightsizeBins(result.bins, strategySheets, parts, partGap, borderGap, result.usage || {});
-      const newStats = strategyStats(result.bins, result.unplaced);
-      Object.assign(strategyResults[startStrategyKey], { bins: result.bins, unplaced: result.unplaced }, newStats);
+    if (better || baselineChanged){
+      const newStats = strategyStats(main.bins, main.unplaced);
+      if (better) Object.assign(target, { bins: main.bins, unplaced: main.unplaced }, newStats);
 
       // Only redraw the on-screen report if the user is still looking at the
       // same strategy this result belongs to — if they've since clicked a
@@ -3219,6 +3270,11 @@ function tryHarder(partGap, borderGap, quality){
       });
       renderReportBody(partGap, borderGap, quality);
       const after = document.getElementById('tryHarderNote');
+      if (!better){
+        after.style.color = 'var(--text-dim)';
+        after.textContent = `No better layout found after ${EXTRA} more tries; the openings comparison above was refined. (Click again to try another ${EXTRA}.)`;
+        return;
+      }
       after.style.color = 'var(--green)';
       after.textContent = `✓ Found a better layout — ${newStats.sheets} sheet${newStats.sheets===1?'':'s'}, ${newStats.efficiency.toFixed(1)}% efficiency, ${(newStats.wastedArea/144).toFixed(1)} ft² wasted. Updated above.`;
     } else {
@@ -3573,6 +3629,7 @@ function openingsSavingText(s, nested){
       + (sv.costSaved != null && sv.costSaved > 0 ? ' ($' + sv.costSaved.toFixed(2) + ')' : '')
       + ' - ' + sv.withSheets + ' instead of ' + sv.withoutSheets + ' with openings left empty.';
   }
+  if (sv.costSaved != null && sv.costSaved > 0.005) return lead + ': saves $' + sv.costSaved.toFixed(2) + ' on a cheaper sheet mix (' + sv.withSheets + ' sheet' + (sv.withSheets===1?'':'s') + ').';
   if (sv.unplacedSaved > 0) return lead + ': fits ' + sv.unplacedSaved + ' more part' + (sv.unplacedSaved===1?'':'s') + ' on the stock you have.';
   const same = sv.withSheets + ' sheet' + (sv.withSheets===1?'':'s');
   return nested > 0 ? lead + ', but it takes the same ' + same + ' either way on this job.'
@@ -3587,7 +3644,7 @@ function countNestedInOpenings(bins){
     const hosts = b.placements.filter(p=> p.openings && p.openings.length);
     if (!hosts.length) return;
     b.placements.forEach(q=>{
-      if (hosts.some(h=> h!==q && q.x>=h.x-1e-9 && q.y>=h.y-1e-9 && q.x+q.w<=h.x+h.w+1e-9 && q.y+q.h<=h.y+h.h+1e-9)) n++;
+      if (hosts.some(h=> h!==q && rectContains(h, q))) n++;
     });
   });
   return n;
@@ -4555,9 +4612,16 @@ function sanitizeImportedPart(p, idx){
     name: (p.name!=null && String(p.name).trim()!=='') ? p.name : ('Part ' + (idx+1)),
     qty: Math.max(0, parseInt(p.qty)||0),
     rotate: p.rotate!=null ? !!p.rotate : true,
-    openings: sanitizeOpenings(p.openings),
-    openingsBase: (p.openingsBase && isValidDims(p.openingsBase.w, p.openingsBase.h)) ? { w:p.openingsBase.w, h:p.openingsBase.h } : undefined,
-  });
+  }, importedOpenings(p));
+}
+/* Openings only come in with the size they were measured at; without it
+   they could never be flagged stale, so they're dropped. */
+function importedOpenings(p){
+  const list = sanitizeOpenings(p.openings);
+  const b = p.openingsBase;
+  const bw = b ? Number(b.w) : NaN, bh = b ? Number(b.h) : NaN;
+  if (!list || !list.length || !isValidDims(bw, bh)) return { openings: undefined, openingsBase: undefined, useOpenings: undefined };
+  return { openings: list, openingsBase: { w: bw, h: bh }, useOpenings: !(p.useOpenings === false || p.useOpenings === 'false') };
 }
 function sanitizeImportedSheetType(st, idx){
   return Object.assign({}, st, {
