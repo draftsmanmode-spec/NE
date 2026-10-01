@@ -645,6 +645,268 @@ check(has(ex.internal.text, '| Material |', 'Used'), 'internal PDF keeps the mat
 check(ex.shop.links === 4 && ex.internal.links === 4, 'sheet index rows and "Back to summary" are live links (2 + 2)');
 check(ex.big.complete && /compared \d+ of \d+ candidate layouts/.test(ex.big.note), 'big job under a time budget: complete result, and the report says the search was cut short');
 
+// ---- shop-floor layout editing ----------------------------------------------
+// Helpers in the page: the layout as plain data, and its invariants.
+await page.evaluate(() => {
+  window.__layout = () => {
+    const s = strategyResults[selectedStrategyKey];
+    return JSON.stringify(s.bins.map(b => [b.sheetType.id, b.placements.map(p => [p.defId, +p.x.toFixed(4), +p.y.toFixed(4), p.rotated])]));
+  };
+  window.__check = () => {
+    const s = strategyResults[selectedStrategyKey], problems = [];
+    const count = {};
+    s.bins.forEach(b => b.placements.forEach(p => { count[p.defId] = (count[p.defId] || 0) + 1; }));
+    s.unplaced.forEach(u => { count[u.defId] = (count[u.defId] || 0) + 1; });
+    parts.forEach(p => { if ((count[p.id] || 0) !== p.qty) problems.push(p.name + ' count ' + (count[p.id] || 0) + ' != ' + p.qty); });
+    sheetTypes.forEach(st => { const n = s.bins.filter(b => b.sheetType.id === st.id).length; if (st.qty != null && n > st.qty) problems.push('stock ' + st.name); });
+    if (s.sheets !== s.bins.length) problems.push('sheet count stale');
+    return { problems, bins: s.bins.map(b => ({ w: b.w, h: b.h, placements: b.placements })), gap: lastRunParams.partGap, border: lastRunParams.borderGap };
+  };
+});
+const layoutOk = async (label) => {
+  const r = await page.evaluate(() => window.__check());
+  const ok = r.problems.length === 0 && geometryOk(r.bins, r.gap, r.border);
+  if (!ok) console.log('  layout problems after ' + label + ':', r.problems);
+  return ok;
+};
+await page.evaluate(() => {
+  parts = [];
+  document.getElementById('bulkPaste').value = 'Gate frame, 40, 30, 2, rail 3\nTab, 6, 5, 16\nGusset, 9, 7, 8\nStrip, 36, 3, 6\nBase plate, 44, 40, 3';
+  document.getElementById('parseBulk').click();
+  sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 185 }];
+  document.getElementById('partGap').value = '0.25'; document.getElementById('borderGap').value = '0.5';
+  document.getElementById('fillOpenings').checked = true;
+  saveWorkingIntoCurrentProject(); render(); goToStep(3);
+});
+await page.waitForTimeout(400);
+const noPopup = await page.evaluate(() => !document.getElementById('previewModal').classList.contains('open'));
+check(noPopup, 'Results opens straight on the report (no preview popup)');
+const sheetsBefore = await page.evaluate(() => strategyResults[selectedStrategyKey].bins.length);
+// Tap a part on the last sheet, then the big "Sheet 1" button.
+const tapPart = async (sheetIdx, plIdx) => {
+  const c = (await page.$$('.sheet-canvas'))[sheetIdx];
+  await c.scrollIntoViewIfNeeded();
+  const f = await page.evaluate(([si, pi]) => { const b = strategyResults[selectedStrategyKey].bins[si]; const p = b.placements[pi]; return [(p.x + p.w / 2) / b.w, (p.y + p.h / 2) / b.h]; }, [sheetIdx, plIdx]);
+  const box = await c.boundingBox();
+  await page.mouse.click(box.x + box.width * f[0], box.y + box.height * f[1]);
+};
+// A small part from a full sheet, moved to the sheet with the most room.
+const pick = await page.evaluate(() => {
+  const bins = strategyResults[selectedStrategyKey].bins;
+  const used = b => b.placements.reduce((a, p) => a + p.w * p.h, 0);
+  let ti = 0; bins.forEach((b, i) => { if (b.w * b.h - used(b) > bins[ti].w * bins[ti].h - used(bins[ti])) ti = i; });
+  let si = -1, pi = -1, area = Infinity;
+  bins.forEach((b, i) => { if (i === ti) return; b.placements.forEach((p, k) => { if (p.w * p.h < area){ area = p.w * p.h; si = i; pi = k; } }); });
+  return { si, pi, ti };
+});
+await tapPart(pick.si, pick.pi);
+const barOpen = await page.evaluate(() => document.getElementById('layoutBar').classList.contains('open') && !!layoutSel);
+check(barOpen, 'tapping a part opens the big button bar');
+const beforeMove = await page.evaluate(() => window.__layout());
+await page.click(`#layoutBar [data-lb-move="${pick.ti}"]`);
+const afterMove = await page.evaluate(() => ({ layout: window.__layout(), toast: document.getElementById('layoutToast').textContent, edited: strategyResults[selectedStrategyKey].edited }));
+check(afterMove.layout !== beforeMove && (await layoutOk('move')) && afterMove.edited && /moved to Sheet \d/.test(afterMove.toast),
+  `move to another sheet via the big button: valid layout, every part accounted for ("${afterMove.toast}")`);
+// Take a part off, then put it back from the tray.
+await tapPart(0, 0);
+await page.click('#lbTakeOff');
+const tray = await page.evaluate(() => ({ tray: !!document.getElementById('offSheetTray'), off: strategyResults[selectedStrategyKey].unplaced.length,
+  stockNote: /sheet stock ran out/.test(document.getElementById('reportBody').textContent) }));
+check(tray.tray && tray.off === 1 && !tray.stockNote && (await layoutOk('take off')), 'take off: part goes to "Not on a sheet" (not reported as a stock shortage)');
+await page.click('#offSheetTray [data-putback]');
+const back = await page.evaluate(() => ({ off: strategyResults[selectedStrategyKey].unplaced.length, tray: !!document.getElementById('offSheetTray') }));
+check(back.off === 0 && !back.tray && (await layoutOk('put back')), 'put back: the part lands on a sheet and the tray disappears');
+// Tidy a sheet.
+await page.click('.sheet-card [data-tidy]');
+check(await layoutOk('tidy'), 'tidy this sheet keeps a valid layout');
+// Undo steps back exactly.
+const beforeUndo = await page.evaluate(() => window.__layout());
+await tapPart(0, 0);
+await page.click('#lbTakeOff');
+await page.click('#btnUndo');
+check((await page.evaluate(() => window.__layout())) === beforeUndo && (await layoutOk('undo')), 'undo restores the layout exactly');
+// A move that can't happen leaves everything as it was.
+const refused = await page.evaluate(() => {
+  const s = strategyResults[selectedStrategyKey];
+  s.bins[0].sheetType.qty = s.bins.length;           // no stock left for a new sheet
+  const before = window.__layout();
+  const pl = s.bins[0].placements[0];
+  const ok = layoutMove(0, pl, { newSheet: s.bins[0].sheetType.id });
+  const r = { ok, same: window.__layout() === before, toast: document.getElementById('layoutToast').textContent };
+  sheetTypes.forEach(st => st.qty = null);
+  return r;
+});
+check(!refused.ok && refused.same && /No more .* in stock/.test(refused.toast), `a new sheet beyond stock is refused and nothing changes ("${refused.toast}")`);
+// New sheet when stock allows.
+const newSheet = await page.evaluate(() => {
+  const s = strategyResults[selectedStrategyKey], n = s.bins.length;
+  layoutMove(0, s.bins[0].placements[0], { newSheet: s.bins[0].sheetType.id });
+  return { more: strategyResults[selectedStrategyKey].bins.length === n + 1 };
+});
+check(newSheet.more && (await layoutOk('new sheet')), 'move to a new sheet adds a sheet');
+// The PDF and the cut list follow the edits.
+const follow = await page.evaluate(async () => {
+  const s = strategyResults[selectedStrategyKey];
+  const trace = []; const doc = await buildNestingPdf('report', 'shop', trace);
+  const csvSheets = new Set(buildCutListCsv().trim().split('\r\n').slice(1).map(r => r.split(',')[0])).size;
+  return { pdfSheets: trace.filter(t => /^Sheet \d+ of \d+/.test(t)).length, bins: s.bins.length, csvSheets };
+});
+check(follow.pdfSheets === follow.bins && follow.csvSheets === follow.bins, `PDF and cut list follow the edited layout (${follow.bins} sheets)`);
+// Saved with the project: reopen = same layout; change a part = edits cleared, and said so.
+const saved = await page.evaluate(() => {
+  const edited = window.__layout();
+  loadProjectIntoWorking(currentProjectId); runNesting();
+  const r = { same: window.__layout() === edited, banner: !!document.getElementById('editedBanner') };
+  parts.find(p => p.name === 'Tab').qty = 17; saveWorkingIntoCurrentProject(); runNesting();
+  r.cleared = !strategyResults[selectedStrategyKey].edited && /cleared/.test(document.getElementById('reportBody').textContent)
+    && !getProject(currentProjectId).editedLayout;
+  return r;
+});
+check(saved.same && saved.banner, 'hand edits are saved with the project and come back on reopen');
+check(saved.cleared && (await layoutOk('after change')), 'changing a part clears stale hand edits and says so');
+// Reset goes back to the computed layout.
+await tapPart(0, 0);
+await page.click('#lbTakeOff');
+await page.click('#btnResetLayout');   // the confirm is accepted by the page-wide dialog handler
+const reset = await page.evaluate(() => ({ edited: !!strategyResults[selectedStrategyKey].edited, off: strategyResults[selectedStrategyKey].unplaced.length }));
+check(!reset.edited && reset.off === 0 && (await layoutOk('reset')), 'reset layout goes back to the computed one');
+
+// ---- editing regressions from code review ----------------------------------
+// A refused move leaves the sheet drawing and tapping working.
+const refusedUi = await page.evaluate(() => {
+  const s = strategyResults[selectedStrategyKey];
+  for (let bi = 0; bi < s.bins.length; bi++){
+    const big = s.bins[bi].placements.slice().sort((a, b) => b.w * b.h - a.w * a.h)[0];
+    for (let ti = 0; ti < s.bins.length; ti++){
+      if (ti === bi) continue;
+      const before = window.__layout();
+      if (!layoutMove(bi, big, ti) && window.__layout() === before) return { bi, pi: strategyResults[selectedStrategyKey].bins[bi].placements.indexOf(big), name: big.name };
+      layoutUndoLast();
+    }
+  }
+  return null;
+});
+if (refusedUi){
+  await tapPart(refusedUi.bi, refusedUi.pi);
+  const sel = await page.evaluate(() => layoutSel && layoutSel.pl.name);
+  check(sel === refusedUi.name && (await layoutOk('refused move')), `after a refused move the part can still be tapped (${refusedUi.name})`);
+  await page.click('#lbDone');
+} else check(false, 'could not set up a refused move');
+// Taken off by hand is reported as such in the PDF - not as a stock shortage.
+await tapPart(0, 0);
+await page.click('#lbTakeOff');
+const offPdf = await page.evaluate(async () => { const t = []; await buildNestingPdf('report', 'shop', t); return t.join(' | '); });
+check(has(offPdf, 'Taken off the sheets by hand') && lacks(offPdf, 'Sheet stock ran out'), 'PDF says a part was taken off by hand, not that stock ran out');
+await page.click('#btnResetLayout');
+// Reset and strategy switch never leave the button bar hanging.
+await tapPart(0, 0);
+await page.click('#lbTakeOff');
+await tapPart(0, 0);
+await page.click('#btnResetLayout');
+check(await page.evaluate(() => !document.getElementById('layoutBar').classList.contains('open') && !layoutSel), 'Reset closes the button bar');
+// Two sheet types: the recommended star stays put through edits; Reset keeps
+// the strategy you were on; switching strategy drops edits with a warning.
+const two = await page.evaluate(() => {
+  sheetTypes.push({ id: nextId(), name: '60x120', width: 120, height: 60, qty: null, cost: 290 });
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const firstRow = () => document.querySelector('#results table.breakdown tbody tr td').textContent;
+  const star = firstRow();
+  const s = strategyResults[selectedStrategyKey];
+  layoutTakeOff(0, s.bins[0].placements[0]);
+  const starAfter = firstRow();
+  const other = strategyOrder.find(k => k !== selectedStrategyKey);
+  switchStrategy(other);
+  const switched = selectedStrategyKey === other && !getProject(currentProjectId).editedLayout;
+  const comp = JSON.stringify(strategyResults[other].computed.bins.map(b => b.placements.length));
+  const s2 = strategyResults[other];
+  layoutTakeOff(0, s2.bins[0].placements[0]);
+  layoutReset();
+  return { star, starAfter, switched, keptKey: selectedStrategyKey === other,
+           resetToComputed: JSON.stringify(strategyResults[other].bins.map(b => b.placements.length)) === comp && !strategyResults[other].edited };
+});
+check(two.star === two.starAfter, 'the recommended strategy stays first after an edit');
+check(two.switched && two.keptKey && two.resetToComputed, 'switching strategy drops edits; Reset goes back to that strategy\'s computed layout');
+// Undo back to the computed layout brings its notes back.
+const notesBack = await page.evaluate(() => {
+  parts = [{ id: nextId(), name: 'Frame', width: 30, height: 20, qty: 2, rotate: true, color: null },
+           { id: nextId(), name: 'Tab', width: 6, height: 5, qty: 10, rotate: true, color: null }];
+  setPartOpenings(parts[0], [frameOpening(30, 20, 2)]);
+  sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const note = () => (document.getElementById('openingsNote') || {}).textContent || '';
+  const before = /saves 1 sheet/.test(note());
+  const s = strategyResults[selectedStrategyKey];
+  layoutTakeOff(0, s.bins[0].placements[s.bins[0].placements.length - 1]);
+  const during = /saves/.test(note());
+  layoutUndoLast();
+  return { before, during, after: /saves 1 sheet/.test(note()) };
+});
+check(notesBack.before && !notesBack.during && notesBack.after, 'edited layout drops the "saves N sheets" claim; undo back to computed brings it back');
+// A real stock shortage stays a stock shortage after reopening an edited project.
+const shortage = await page.evaluate(() => {
+  parts = [{ id: nextId(), name: 'Plate', width: 20, height: 20, qty: 9, rotate: true, color: null }];
+  sheetTypes = [{ id: nextId(), name: '48x48', width: 48, height: 48, qty: 1, cost: 50 }];
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const s = strategyResults[selectedStrategyKey];
+  const short = s.unplaced.length;
+  layoutTidy(0);
+  loadProjectIntoWorking(currentProjectId); runNesting();
+  const r = strategyResults[selectedStrategyKey];
+  return { short, edited: r.edited, stillShort: r.unplaced.filter(u => !u.takenOff).length,
+           note: /sheet stock ran out/.test(document.getElementById('reportBody').textContent) };
+});
+check(shortage.short > 0 && shortage.edited && shortage.stillShort === shortage.short && shortage.note, `stock shortage survives reopening an edited project (${shortage.short} short)`);
+// Hand edits travel in the project's Export JSON and come back on Import.
+const exported = await page.evaluate(() => {
+  const s = strategyResults[selectedStrategyKey];
+  saveWorkingIntoCurrentProject();
+  const proj = getProject(currentProjectId);
+  return { json: JSON.stringify({ name: proj.name + ' (copy)', sheetTypes: proj.sheetTypes, parts: proj.parts, settings: proj.settings, editedLayout: proj.editedLayout }), layout: window.__layout() };
+});
+const jsonPath = path.join(tmp, 'project.json');
+fs.writeFileSync(jsonPath, exported.json);
+await page.setInputFiles('#importFile', jsonPath);
+await page.waitForFunction(n => getProject(currentProjectId) && getProject(currentProjectId).name === n, JSON.parse(exported.json).name);
+const imported = await page.evaluate(() => { goToStep(3); return null; });
+await page.waitForTimeout(300);
+const imp = await page.evaluate(() => ({ layout: window.__layout(), banner: !!document.getElementById('editedBanner') }));
+check(imp.layout === exported.layout && imp.banner, 'hand edits survive Export JSON / Import');
+// A tampered saved layout (overlapping parts) is refused, not shown.
+const tampered = await page.evaluate(() => {
+  const proj = getProject(currentProjectId);
+  const e = proj.editedLayout;
+  e.bins[0].p[1] = [e.bins[0].p[0][0], e.bins[0].p[0][1], e.bins[0].p[0][2], e.bins[0].p[0][3]];   // two parts on one spot
+  runNesting();
+  return { edited: !!strategyResults[selectedStrategyKey].edited, gone: !proj.editedLayout };
+});
+check(!tampered.edited && tampered.gone && (await layoutOk('tampered')), 'a saved layout with overlapping parts is refused');
+
+// Randomised editing: 150 random moves / take-offs / put-backs / tidies / undos,
+// checking the layout after every one.
+const fuzzEdit = await page.evaluate(() => {
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const problems = [];
+  for (let i = 0; i < 150; i++){
+    const s = strategyResults[selectedStrategyKey];
+    const op = Math.floor(rnd() * 5);
+    const bi = Math.floor(rnd() * s.bins.length), b = s.bins[bi];
+    const pl = b && b.placements[Math.floor(rnd() * b.placements.length)];
+    if (op === 0 && pl) layoutMove(bi, pl, Math.floor(rnd() * s.bins.length));
+    else if (op === 1 && pl) layoutTakeOff(bi, pl);
+    else if (op === 2 && s.unplaced.length) layoutPutBack(s.unplaced[0].defId, 1 + Math.floor(rnd() * 3));
+    else if (op === 3 && b) layoutTidy(bi);
+    else layoutUndoLast();
+    const c = window.__check();
+    if (c.problems.length) problems.push(i + ': ' + c.problems.join('; '));
+    window.__fuzzBins = (window.__fuzzBins || []).concat([c]);
+  }
+  const all = window.__fuzzBins; window.__fuzzBins = null;
+  return { problems, snaps: all.filter((_, k) => k % 10 === 9) };
+});
+check(fuzzEdit.problems.length === 0 && fuzzEdit.snaps.every(c => geometryOk(c.bins, c.gap, c.border)),
+  `150 random edits: counts, stock and geometry valid after every one${fuzzEdit.problems.length ? ' - ' + fuzzEdit.problems[0] : ''}`);
+await page.evaluate(() => { document.getElementById('layoutToast').classList.remove('show'); layoutSelect(null, null); });
+
 // The PDF path draws the same sheets through drawSheet(); make sure it still builds.
 const pdfBytes = await page.evaluate(async () => {
   sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 100 }];

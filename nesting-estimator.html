@@ -82,6 +82,32 @@
   button.danger:hover{ border-color:var(--red); color:var(--red); }
   button:disabled{ opacity:.4; cursor:not-allowed; }
   button.small{ padding:5px 9px; font-size:11.5px; }
+  /* Shop-floor controls: large, plain-worded, finger-sized. */
+  button.big{ padding:12px 18px; font-size:15px; font-weight:600; min-height:48px; border-radius:10px; }
+  button.big:disabled, button.small:disabled{ opacity:.4; cursor:not-allowed; filter:none; }
+  .shop-bar{ display:flex; flex-wrap:wrap; gap:10px; margin:0 0 18px 0; }
+  .layout-banner{ border:1px solid var(--purple); background:rgba(124,58,237,.12); border-radius:10px; padding:12px 14px; margin:0 0 16px 0; font-size:13.5px; }
+  .layout-banner.warn{ border-color:var(--amber, #e0a64a); background:rgba(224,166,74,.12); }
+  .layout-hint{ font-size:14px; color:var(--text-dim); margin:4px 0 12px 0; }
+  .sheet-canvas{ cursor:pointer; }
+  .tray-card{ border:2px dashed var(--amber, #e0a64a); border-radius:12px; padding:14px 16px; margin:0 0 18px 0; }
+  .tray-card h3{ margin:0 0 10px 0; font-family:var(--display); font-size:16px; }
+  .tray-row{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 0; border-top:1px solid var(--line-soft); font-size:14px; }
+  .tray-row:first-of-type{ border-top:none; }
+  .tray-row .nm{ flex:1; min-width:180px; }
+  #layoutBar{ position:fixed; left:0; right:0; bottom:0; z-index:60; display:none; background:#1b1426; border-top:3px solid var(--pink, #ef5cb0);
+    padding:14px 18px 16px 18px; box-shadow:0 -10px 30px rgba(0,0,0,.45); }
+  #layoutBar.open{ display:block; }
+  #layoutBar .lb-row{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; max-width:1200px; margin:0 auto; }
+  #layoutBar .lb-title{ font-size:16px; font-weight:700; width:100%; max-width:1200px; margin:0 auto 10px auto; }
+  #layoutBar .lb-label{ font-size:14px; color:var(--text-dim); margin-right:4px; }
+  #layoutBar select{ min-height:48px; font-size:15px; }
+  #layoutToast{ position:fixed; left:50%; transform:translateX(-50%); bottom:24px; z-index:70; max-width:min(92vw, 720px);
+    background:#24183a; border:1px solid var(--purple); border-radius:10px; padding:12px 16px; font-size:14.5px; display:none; box-shadow:0 8px 24px rgba(0,0,0,.5); }
+  #layoutToast.bad{ border-color:var(--red); }
+  #layoutToast.show{ display:block; }
+  body.layout-bar-open #layoutToast{ bottom:190px; }
+  body.layout-bar-open .bottom-nav{ display:none; }
 
   input[type=text], input[type=number], input[type=color], select, textarea{
     font-family:var(--mono); background:var(--bg-alt); border:1px solid var(--line);
@@ -591,6 +617,10 @@
   </div>
 </div>
 
+<!-- Shop-floor layout editing: shown while a part on a sheet is selected. -->
+<div id="layoutBar" role="region" aria-label="Move the selected part"></div>
+<div id="layoutToast" role="status" aria-live="polite"></div>
+
 <div id="storageWarningBanner" style="display:none; background:#4a1420; color:#ffb9c8; border-bottom:1px solid var(--red); padding:10px 20px; font-size:12.5px; text-align:center;">
   &#9888; Changes aren't being saved to this browser right now (storage may be full, blocked, or private-browsing). Your work is still fine <b>within this session</b> — but export a backup (header &rarr; Export JSON / Backup all projects) before closing this tab, or it will be lost.
 </div>
@@ -824,6 +854,7 @@
           <div class="checkline"><input type="checkbox" id="secCommonLines" checked><label class="small">Common-line notes</label></div>
           <div class="checkline"><input type="checkbox" id="secRemnants" checked><label class="small">Reusable remnants</label></div>
           <div class="checkline"><input type="checkbox" id="secSheets" checked><label class="small">Sheet layouts (drawings)</label></div>
+          <div class="checkline"><input type="checkbox" id="secQuoting"><label class="small">Show quoting tools (customer quote PDF, company details)</label></div>
         </div>
         <div class="pv-paper-row" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft);">
           <label class="small" for="exportAudience">PDF for</label>
@@ -1146,6 +1177,7 @@ function renderHome(){
 const navLabels = { 1:'Add sheets & settings &rarr;', 2:'Run nesting &rarr;', 3:'Done' };
 function goToStep(n){
   currentStep = n;
+  if (n !== 3 && typeof layoutSelect === 'function' && layoutSel) layoutSelect(null, null);
   document.querySelectorAll('.step-panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('step'+n).classList.add('active');
   document.querySelectorAll('.step-pill').forEach(p=>{
@@ -1163,14 +1195,7 @@ function goToStep(n){
     // paints "Nesting…" before blocking — otherwise a big job just looks frozen.
     document.getElementById('results').innerHTML = '<div class="empty-state">Nesting&hellip;</div>';
     setTimeout(()=>{
-      runNesting();
-      // Show the clean 1-page result as the immediate pop-up view. The full
-      // detailed report (comparison table, parts list, sheet drawings, etc.)
-      // is still there underneath — closing this just reveals it, rather
-      // than showing everything at once.
-      if (lastNestResult && lastNestResult.bins && lastNestResult.bins.length){
-        printOverview();
-      }
+      runNesting();   // opens on the report; "Preview pages..." is one tap away
     }, 20);
   }
   window.scrollTo({top:0, behavior:'smooth'});
@@ -2730,6 +2755,20 @@ function addOpeningFreeRects(freeRects, pl, partGap){
 // Material a placement actually consumes: its box, minus openings handed back.
 function placedArea(p){ return p.w*p.h - (p.openArea || 0); }
 
+// A unit placed at (x, y), turned or not - the one way a placement is made.
+function makePlacement(unit, x, y, rotated){
+  const pl = { x, y, w: rotated ? unit.h : unit.w, h: rotated ? unit.w : unit.h, rotated,
+               name:unit.name, tag:unit.tag, color:unit.color, defId:unit.defId };
+  if (unit.openings && unit.openings.length){
+    // Same 90deg turn as rotatedBinView(): local (u,v) -> (H - v, u).
+    pl.openings = unit.openings.map(o => rotated ? { x: unit.h - o.y - o.h, y: o.x, w: o.h, h: o.w } : { x:o.x, y:o.y, w:o.w, h:o.h });
+    pl.openArea = pl.openings.reduce((s, o) => s + o.w*o.h, 0);
+  } else if (unit.holeArea){
+    pl.openArea = unit.holeArea;
+  }
+  return pl;
+}
+
 function packSheetsOnce(sheetTypesIn, unitsSorted, partGap, borderGap, rule){
   const bins = [];
   const usage = {};
@@ -2778,17 +2817,7 @@ function packSheetsOnce(sheetTypesIn, unitsSorted, partGap, borderGap, rule){
       }
     }
     if (!best){ unplaced.push(unit); continue; }
-    const rotated = best.rotated;
-    const drawW = rotated ? unit.h : unit.w;
-    const drawH = rotated ? unit.w : unit.h;
-    const pl = { x:best.x, y:best.y, w:drawW, h:drawH, rotated, name:unit.name, tag:unit.tag, color:unit.color, defId:unit.defId };
-    if (unit.openings && unit.openings.length){
-      // Same 90deg turn as rotatedBinView(): local (u,v) -> (H - v, u).
-      pl.openings = unit.openings.map(o => rotated ? { x: unit.h - o.y - o.h, y: o.x, w: o.h, h: o.w } : { x:o.x, y:o.y, w:o.w, h:o.h });
-      pl.openArea = pl.openings.reduce((s, o) => s + o.w*o.h, 0);
-    } else if (unit.holeArea){
-      pl.openArea = unit.holeArea;
-    }
+    const pl = makePlacement(unit, best.x, best.y, best.rotated);
     best.bin.placements.push(pl);
     splitFreeRects(best.bin.freeRects, best.x, best.y, best.w, best.h);
     if (pl.openings) addOpeningFreeRects(best.bin.freeRects, pl, partGap);
@@ -3378,7 +3407,7 @@ function quoteMeta(){
 }
 const REPORT_PREFS_KEY = 'nestingEstimatorReportPrefs_v1';
 let reportPrefs = { parts:true, breakdown:true, commonLines:true, remnants:true, sheets:true,
-                    paper:'tabloid', customW:11, customH:17, audience:'internal' };
+                    paper:'tabloid', customW:11, customH:17, audience:'shop', quoting:false };
 function loadReportPrefs(){
   try{
     const raw = localStorage.getItem(REPORT_PREFS_KEY);
@@ -3390,14 +3419,20 @@ function loadReportPrefs(){
   document.getElementById('secRemnants').checked = reportPrefs.remnants;
   document.getElementById('secSheets').checked = reportPrefs.sheets;
   document.getElementById('paperSize').value = reportPrefs.paper || 'tabloid';
-  document.getElementById('exportAudience').value = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'internal';
+  document.getElementById('secQuoting').checked = !!reportPrefs.quoting;
+  document.getElementById('exportAudience').value = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'shop';
   syncAudienceUI();
   document.getElementById('paperCustomW').value = reportPrefs.customW;
   document.getElementById('paperCustomH').value = reportPrefs.customH;
   syncPaperUI();
 }
 function syncAudienceUI(){
-  const aud = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'internal';
+  // Quoting tools stay out of the way unless switched on.
+  const quoting = !!reportPrefs.quoting;
+  if (!quoting && reportPrefs.audience === 'customer') reportPrefs.audience = 'shop';
+  document.querySelectorAll('#exportAudience option[value="customer"], #exportAudiencePv option[value="customer"]').forEach(o=>{ o.hidden = !quoting; o.disabled = !quoting; });
+  document.getElementById('quoteDetailsCard').style.display = quoting ? '' : 'none';
+  const aud = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'shop';
   document.getElementById('exportAudience').value = aud;
   document.getElementById('exportAudiencePv').value = aud;
   document.getElementById('audienceNotePv').textContent = AUDIENCE_NOTES[aud];
@@ -3416,6 +3451,7 @@ function saveReportPrefsFromUI(){
     sheets: document.getElementById('secSheets').checked,
     paper: document.getElementById('paperSize').value,
     audience: document.getElementById('exportAudience').value,
+    quoting: document.getElementById('secQuoting').checked,
     customW: parseFloat(document.getElementById('paperCustomW').value) || 11,
     customH: parseFloat(document.getElementById('paperCustomH').value) || 17,
   };
@@ -3424,7 +3460,7 @@ function saveReportPrefsFromUI(){
   syncPaperUI();
   if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
 }
-['secParts','secBreakdown','secCommonLines','secRemnants','secSheets',
+['secParts','secBreakdown','secCommonLines','secRemnants','secSheets','secQuoting',
  'paperSize','paperCustomW','paperCustomH','exportAudience'].forEach(id=>{
   document.getElementById(id).addEventListener('change', saveReportPrefsFromUI);
 });
@@ -3618,27 +3654,15 @@ function runNesting(){
     return;
   }
   selectedStrategyKey = sortedKeys[0];
+  strategyOrder = sortedKeys;
   lastRunParams = { partGap, borderGap, quality, fillOpenings };
+  // Every strategy keeps a copy of its computed layout: Reset and switching
+  // strategy go back to it.
+  Object.values(strategyResults).forEach(st=> keepComputed(st));
+  layoutUndo = []; layoutSel = null;
+  restoreEditedLayout();
   lastInvalidNote = invalidNote;
-
-  let html = invalidNote;
-  if (sheetTypes.length > 1) html += buildStrategyCompareTable(sortedKeys);
-  html += '<div id="reportBody"></div>';
-  results.innerHTML = html;
-
-  document.querySelectorAll('[data-select-strategy]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      selectedStrategyKey = btn.dataset.selectStrategy;
-      document.querySelectorAll('[data-select-strategy]').forEach(b=>{
-        const isSel = b.dataset.selectStrategy===selectedStrategyKey;
-        b.classList.toggle('primary', isSel);
-        b.textContent = isSel ? 'Selected' : 'Use this';
-      });
-      renderReportBody(partGap, borderGap, quality);
-    });
-  });
-
-  renderReportBody(partGap, borderGap, quality);
+  rerenderResults();
 }
 
 function tryHarder(partGap, borderGap, quality){
@@ -3689,7 +3713,12 @@ function tryHarder(partGap, borderGap, quality){
     if (better || baselineChanged){
       const allUnplaced = main.unplaced.concat(tooBig);
       const newStats = strategyStats(main.bins, allUnplaced);
-      if (better) Object.assign(target, { bins: main.bins, unplaced: allUnplaced }, newStats);
+      if (better){
+        Object.assign(target, { bins: main.bins, unplaced: allUnplaced }, newStats);
+        // A better computed layout replaces any hand edits on this strategy.
+        if (target.edited){ target.edited = false; layoutUndo = []; layoutSel = null; clearEditedLayout(); }
+        keepComputed(target);
+      }
 
       // Only redraw the on-screen report if the user is still looking at the
       // same strategy this result belongs to — if they've since clicked a
@@ -3699,24 +3728,7 @@ function tryHarder(partGap, borderGap, quality){
 
       // Re-render everything (comparison table numbers + report body) so the
       // improvement shows everywhere.
-      const sortedKeys = Object.keys(strategyResults);
-      const resultsDiv = document.getElementById('results');
-      let html = lastInvalidNote || '';
-      if (sheetTypes.length > 1) html += buildStrategyCompareTable(sortedKeys);
-      html += '<div id="reportBody"></div>';
-      resultsDiv.innerHTML = html;
-      document.querySelectorAll('[data-select-strategy]').forEach(b=>{
-        b.addEventListener('click', ()=>{
-          selectedStrategyKey = b.dataset.selectStrategy;
-          document.querySelectorAll('[data-select-strategy]').forEach(bb=>{
-            const isSel = bb.dataset.selectStrategy===selectedStrategyKey;
-            bb.classList.toggle('primary', isSel);
-            bb.textContent = isSel ? 'Selected' : 'Use this';
-          });
-          renderReportBody(partGap, borderGap, quality);
-        });
-      });
-      renderReportBody(partGap, borderGap, quality);
+      rerenderResults();
       const after = document.getElementById('tryHarderNote');
       if (!better){
         after.style.color = 'var(--text-dim)';
@@ -3767,6 +3779,30 @@ function renderReportBody(partGap, borderGap, quality){
     <div class="prh-title">${escHtml(projForHeader ? projForHeader.name : 'Nesting report')}</div>
     <div class="prh-sub">Sheet nesting report &middot; ${escHtml(strategyResults[selectedStrategyKey].label)} &middot; ${new Date().toLocaleDateString()}</div>
   </div>`;
+  const audLabel = (PDF_AUDIENCES[reportPrefs.audience] || PDF_AUDIENCES.shop).label;
+  html += `<div class="shop-bar">
+    <button class="big primary" id="btnPrint" title="Change who the PDF is for under Report sections">Export PDF: ${escHtml(audLabel)}</button>
+    <button class="big" id="btnOverview" title="See the pages, pick sheets, then export">Preview pages&hellip;</button>
+    <button class="big" id="btnCutList" title="Every placed part: sheet, position from the sheet's top-left corner, rotation">Cut list (CSV)</button>
+    <button class="big" id="btnUndo" ${layoutUndo.length ? '' : 'disabled'} title="Undo the last change to the layout">&#8630; Undo</button>
+    <button class="big" id="btnResetLayout" ${s.edited ? '' : 'disabled'} title="Throw away hand edits and go back to the computed layout">Reset layout</button>
+  </div>`;
+  if (layoutNotice){ html += `<div class="layout-banner warn">${escHtml(layoutNotice)}</div>`; layoutNotice = ''; }
+  if (s.edited) html += `<div class="layout-banner" id="editedBanner">&#9995; This layout has been changed by hand. The edits are saved with this project (and in its Export JSON), and the PDF and cut list follow them.</div>`;
+  const offSheets = unplaced.filter(u=> !(s.tooBig || []).includes(u));
+  if (offSheets.length){
+    const groups = {};
+    offSheets.forEach(u=>{ (groups[u.defId] = groups[u.defId] || { u, n: 0 }).n++; });
+    html += `<div class="tray-card" id="offSheetTray"><h3>Not on a sheet (${offSheets.length})</h3>`
+      + Object.values(groups).map(gr=>{
+          const def = parts.find(p=> p.id === gr.u.defId);
+          const nm = def ? def.name : gr.u.name, sz = def ? def.width + '" × ' + def.height + '"' : '';
+          return `<div class="tray-row"><span class="nm"><b>#${gr.u.tag}</b> ${escHtml(nm)} &middot; ${sz} &middot; ${gr.n} pc${gr.n === 1 ? '' : 's'}</span>
+            <button class="big" data-putback="${escAttr(gr.u.defId)}" data-n="1">Put one back</button>
+            ${gr.n > 1 ? `<button class="big" data-putback="${escAttr(gr.u.defId)}" data-n="${gr.n}">Put all ${gr.n} back</button>` : ''}</div>`;
+        }).join('')
+      + '</div>';
+  }
   html += '<div class="summary-strip">';
   html += statBlock(bins.length, 'Sheets needed', 'purple');
   html += statBlock(s.efficiency.toFixed(1)+'%', 'Overall efficiency', s.efficiency>=70?'green':(s.efficiency>=45?'purple':'red'));
@@ -3786,7 +3822,7 @@ function renderReportBody(partGap, borderGap, quality){
   html += `<div class="gap-note" style="margin-top:-14px;">Efficiency context: this result is <span>${effBand}</span>.</div>`;
 
   if (oversizedParts.length) html += `<div class="warning-box" id="oversizedNote"><b>Not nested &mdash; too big for any sheet.</b> ${oversizedHtml()}</div>`;
-  const stockOut = unplaced.filter(u=> !(s.tooBig || []).includes(u));
+  const stockOut = unplaced.filter(u=> !(s.tooBig || []).includes(u) && !u.takenOff);
   if (stockOut.length){
     const grouped = {};
     stockOut.forEach(u=> grouped[u.defId] = (grouped[u.defId]||0)+1);
@@ -3847,12 +3883,10 @@ function renderReportBody(partGap, borderGap, quality){
     <button id="btnEditParts">&#9998; Edit parts</button>
     <button id="btnEditSheets">&#9998; Edit sheets &amp; settings</button>
     <button id="btnTryHarder" title="Alternates fresh random layouts with small tweaks to your current best one — only updates if it finds a genuinely better result, never makes it worse">&#8635; Try harder</button>
-    <button id="btnPrint" title="Choose who the PDF is for under Report sections (internal, shop or customer)">Export PDF: ${escHtml(PDF_AUDIENCES[reportPrefs.audience] ? PDF_AUDIENCES[reportPrefs.audience].label : PDF_AUDIENCES.internal.label)}</button>
-    <button id="btnCutList" title="Every placed part: sheet, position from the sheet's top-left corner, rotation - for a spreadsheet or other shop software">Cut list (CSV)</button>
-    <button id="btnOverview" class="primary" title="One page: summary + every sheet, zoomed out">Preview &amp; export&hellip;</button>
   </div>
   <div id="tryHarderNote" style="font-size:12px; color:var(--text-dim); margin:-10px 0 18px 0; min-height:16px;"></div>`;
   html += '</div>'; // end reportPage1
+  if (reportPrefs.sheets && bins.length) html += '<div class="layout-hint">&#9757; Tap a part on a sheet to move it to another sheet or take it off.</div>';
   html += '<div id="sheetCards"></div>';
   html += '<div class="print-export-footer" id="exportFooterReport"></div>';
 
@@ -3862,7 +3896,13 @@ function renderReportBody(partGap, borderGap, quality){
   document.getElementById('btnEditParts').addEventListener('click', ()=> goToStep(1));
   document.getElementById('btnEditSheets').addEventListener('click', ()=> goToStep(2));
   document.getElementById('btnOverview').addEventListener('click', printOverview);
-  document.getElementById('btnTryHarder').addEventListener('click', ()=> tryHarder(partGap, borderGap, quality));
+  document.getElementById('btnTryHarder').addEventListener('click', ()=>{
+    if (s.edited && !confirm('Try harder starts from the computer\'s search and may replace your hand edits if it finds a better layout. Go ahead?')) return;
+    tryHarder(partGap, borderGap, quality);
+  });
+  document.getElementById('btnUndo').addEventListener('click', layoutUndoLast);
+  document.getElementById('btnResetLayout').addEventListener('click', layoutReset);
+  document.querySelectorAll('[data-putback]').forEach(b=> b.addEventListener('click', ()=> layoutPutBack(b.dataset.putback, parseInt(b.dataset.n, 10))));
   document.querySelectorAll('[data-remnant-add]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const r = remnants[parseInt(btn.dataset.remnantAdd)];
@@ -3877,12 +3917,417 @@ function renderReportBody(partGap, borderGap, quality){
   // A fresh nest invalidates any per-sheet preview choices.
   if (bins.length !== sheetPrintStateCount){ sheetPrintState = {}; sheetPrintStateCount = bins.length; }
 
+  renderLayoutBar();
   const cardsHost = document.getElementById('sheetCards');
+  sheetCardEls = [];
   if (reportPrefs.sheets){
     bins.forEach((bin, i)=> cardsHost.appendChild(buildSheetCard(bin, i)));
   } else {
     cardsHost.innerHTML = '<div class="empty-state">Sheet layouts are hidden — turn them back on in "Report sections" above.</div>';
   }
+}
+
+/* =====================================================================
+   LAYOUT EDITING  (Results step, for the shop floor)
+   Tap a part, then move it to another sheet, onto a new sheet, or off the
+   sheets; put parts back; tidy a sheet. Every change keeps the layout
+   valid: a part only lands where it truly fits with the part gap kept -
+   the target sheet is re-packed when that's the only way - and sheet
+   stock limits hold. A change that can't be made leaves everything as it
+   was and says why. Changes are undoable and saved with the project until
+   its parts, sheets or gaps change.
+   ===================================================================== */
+let layoutSel = null;          // { bin: index into the strategy's bins, pl: placement }
+let layoutUndo = [];           // snapshots, newest last
+let layoutNotice = '';         // one-off banner (e.g. edits cleared)
+let sheetCardEls = [];         // index -> card element, for cheap redraws
+const LAYOUT_UNDO_MAX = 30;
+
+function editParams(){ const r = lastRunParams || {}; return { gap: r.partGap || 0, border: r.borderGap || 0 }; }
+function currentStrategy(){ return strategyResults[selectedStrategyKey]; }
+function strategySheetTypes(key){
+  const valid = sheetTypes.filter(st=> isValidDims(st.width, st.height));
+  return key && key.startsWith('single:') ? valid.filter(st=> 'single:' + st.id === key) : valid;
+}
+function unitOf(pl){ return unitFromPlacement(pl, parts); }
+function plTag(pl){ return '#' + (pl.tag != null ? pl.tag : partTagFor(pl.defId)); }
+
+/* Free space on a sheet as it stands: the usable area minus every part's
+   box (with its gap), plus the inside of each frame's openings minus what
+   already sits in them. */
+function rebuildFreeRects(bin, partGap){
+  const bg = bin.borderGap || 0;
+  const fr = [{ x: bg, y: bg, w: bin.w - 2*bg, h: bin.h - 2*bg }];
+  bin.placements.forEach(p=> splitFreeRects(fr, p.x, p.y, p.w + partGap, p.h + partGap));
+  bin.placements.forEach(h=>{
+    if (!h.openings || !h.openings.length) return;
+    const inner = [];
+    addOpeningFreeRects(inner, h, partGap);
+    bin.placements.forEach(q=>{ if (q !== h && rectContains(h, q)) splitFreeRects(inner, q.x, q.y, q.w + partGap, q.h + partGap); });
+    inner.forEach(r=> fr.push(r));
+  });
+  pruneFreeRects(fr);
+  bin.freeRects = fr;
+  return fr;
+}
+// Best valid re-pack of one sheet's parts (several orders x rules), or null.
+function repackOneSheet(st, units, g){
+  let best = null;
+  const one = [Object.assign({}, st, { qty: null })];
+  for (const sorter of sortStrategies){
+    for (const rule of PLACEMENT_RULES){
+      const res = packSheetsOnce(one, units.slice().sort(sorter), g.gap, g.border, rule);
+      if (res.bins.length === 1 && !res.unplaced.length){
+        const sc = scoreResult(res, one);
+        if (!best || sc < best.sc) best = { sc, placements: res.bins[0].placements };
+      }
+    }
+  }
+  return best ? best.placements : null;
+}
+// Put a unit on a sheet: where there's room as it is, else (if allowed) by
+// re-packing that sheet. Returns 'placed' | 'repacked' | null.
+function addToBin(bin, unit, g, allowRepack){
+  const fr = rebuildFreeRects(bin, g.gap);
+  const best = findBestPlacement(fr, unit.w + g.gap, unit.h + g.gap, unit.allowRotate, 'bssf');
+  if (best){ bin.placements.push(makePlacement(unit, best.x, best.y, best.rotated)); return 'placed'; }
+  if (allowRepack === false) return null;
+  const re = repackOneSheet(bin.sheetType, bin.placements.map(unitOf).concat([unit]), g);
+  if (re){ bin.placements = re; return 'repacked'; }
+  return null;
+}
+function newBin(st, g){ return { sheetType: st, indexInType: 0, w: st.width, h: st.height, borderGap: g.border, freeRects: [], placements: [] }; }
+function stockLeft(strategy, st){
+  return st.qty == null ? Infinity : st.qty - strategy.bins.filter(b=> b.sheetType.id === st.id).length;
+}
+
+function snapshotStrategy(st){
+  return { bins: st.bins.map(b=> Object.assign({}, b, { placements: b.placements.slice() })), unplaced: st.unplaced.slice(), edited: !!st.edited };
+}
+// Run one change. `fn` returns { ok: () => message } or { error: message };
+// anything else, or an exception, puts the layout back exactly as it was.
+function layoutEdit(fn){
+  const st = currentStrategy();
+  if (!st) return false;
+  const snap = snapshotStrategy(st);
+  let r;
+  try { r = fn(st); } catch (e){ console.error(e); r = { error: 'That change could not be made: ' + (e && e.message ? e.message : e) }; }
+  if (!r || r.error){
+    st.bins = snap.bins; st.unplaced = snap.unplaced;
+    rerenderResults();   // cards must point at the restored sheets
+    layoutToast(r && r.error ? r.error : 'Nothing changed.', true);
+    return false;
+  }
+  layoutUndo.push(snap);
+  if (layoutUndo.length > LAYOUT_UNDO_MAX) layoutUndo.shift();
+  settleLayout(st, true);
+  layoutToast(r.ok ? r.ok() : 'Done.');
+  return true;
+}
+// After any change: drop empty sheets, renumber, recount, save, redraw.
+function settleLayout(st, edited){
+  st.bins = st.bins.filter(b=> b.placements.length);
+  const per = {};
+  st.bins.forEach(b=>{ per[b.sheetType.id] = (per[b.sheetType.id] || 0) + 1; b.indexInType = per[b.sheetType.id]; delete b._sel; });
+  Object.assign(st, strategyStats(st.bins, st.unplaced));
+  st.edited = edited;
+  // The computed with/without comparison and search note only describe the
+  // computed layout.
+  st.noOpenings = !edited && st.computed ? st.computed.noOpenings : null;
+  st.search = !edited && st.computed ? st.computed.search : null;
+  layoutSel = null;
+  if (edited) saveEditedLayout(); else clearEditedLayout();
+  rerenderResults();
+}
+// The one way the results area is drawn: compare table (in the order the
+// search ranked them, so "recommended" never moves) + report.
+let strategyOrder = [];
+function rerenderResults(){
+  if (!lastRunParams) return;
+  const keys = strategyOrder.filter(k=> strategyResults[k]);
+  const resultsDiv = document.getElementById('results');
+  let html = lastInvalidNote || '';
+  if (sheetTypes.length > 1) html += buildStrategyCompareTable(keys);
+  html += '<div id="reportBody"></div>';
+  resultsDiv.innerHTML = html;
+  document.querySelectorAll('[data-select-strategy]').forEach(b=>{
+    b.addEventListener('click', ()=> switchStrategy(b.dataset.selectStrategy));
+  });
+  renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
+}
+function switchStrategy(key){
+  if (key === selectedStrategyKey || !strategyResults[key]) return;
+  const cur = currentStrategy();
+  if (cur && cur.edited){
+    if (!confirm('Switching strategy drops the hand edits on this layout. Switch anyway?')) return;
+    restoreComputed(cur);
+    clearEditedLayout();
+  }
+  selectedStrategyKey = key;
+  layoutSel = null; layoutUndo = [];
+  rerenderResults();
+}
+function copyBins(bins){ return bins.map(b=> Object.assign({}, b, { placements: b.placements.slice() })); }
+function keepComputed(st){
+  st.computed = { bins: copyBins(st.bins), unplaced: st.unplaced.slice(), noOpenings: st.noOpenings || null, search: st.search || null };
+}
+function restoreComputed(st){
+  const c = st.computed;
+  if (!c) return;
+  st.bins = copyBins(c.bins); st.unplaced = c.unplaced.slice();
+  st.bins.forEach(b=> delete b._sel);
+  Object.assign(st, strategyStats(st.bins, st.unplaced));
+  st.noOpenings = c.noOpenings; st.search = c.search; st.edited = false;
+}
+
+/* ---- the changes ---- */
+function layoutMove(binIdx, pl, target){
+  return layoutEdit(st=>{
+    const g = editParams(), from = st.bins[binIdx];
+    if (!from || !from.placements.includes(pl)) return { error: 'That part is no longer on that sheet - tap it again.' };
+    const unit = unitOf(pl);
+    from.placements = from.placements.filter(p=> p !== pl);
+    let to, how;
+    if (target && target.newSheet){
+      const type = strategySheetTypes(selectedStrategyKey).find(t=> t.id === target.newSheet);
+      if (!type) return { error: 'That sheet type is not available here.' };
+      if (stockLeft(st, type) < 1) return { error: 'No more ' + type.name + ' sheets in stock (quantity ' + type.qty + ').' };
+      to = newBin(type, g);
+      how = addToBin(to, unit, g, false);
+      if (!how) return { error: pl.name + ' does not fit on a ' + type.name + ' sheet.' };
+      st.bins.push(to);
+    } else {
+      to = st.bins[target];
+      if (!to || to === from) return { error: 'Pick a different sheet.' };
+      how = addToBin(to, unit, g, true);
+      if (!how) return { error: pl.name + ' does not fit on Sheet ' + (target + 1) + ', even re-arranged. Try another sheet or a new sheet.' };
+    }
+    return { ok: ()=> plTag(pl) + ' ' + pl.name + ' moved to Sheet ' + (st.bins.indexOf(to) + 1)
+      + (how === 'repacked' ? ' - that sheet was re-arranged to make room.' : '.') };
+  });
+}
+function layoutTakeOff(binIdx, pl){
+  return layoutEdit(st=>{
+    const from = st.bins[binIdx];
+    if (!from || !from.placements.includes(pl)) return { error: 'That part is no longer on that sheet - tap it again.' };
+    from.placements = from.placements.filter(p=> p !== pl);
+    const u = unitOf(pl); u.takenOff = true;
+    st.unplaced = st.unplaced.concat([u]);
+    return { ok: ()=> plTag(pl) + ' ' + pl.name + ' taken off. It is in "Not on a sheet" below the summary.' };
+  });
+}
+// Put parts that are off the sheets back on: into room on an existing sheet
+// first, then by re-arranging one, then on a new sheet.
+function layoutPutBack(defId, count){
+  return layoutEdit(st=>{
+    const g = editParams(), tooBig = st.tooBig || [];
+    const def = parts.find(p=> p.id === defId);
+    if (!def) return { error: 'That part is no longer in the parts list.' };
+    const waiting = st.unplaced.filter(u=> u.defId === defId && !tooBig.includes(u)).slice(0, count || 1);
+    if (!waiting.length) return { error: 'Nothing to put back.' };
+    let placed = 0;
+    const types = strategySheetTypes(selectedStrategyKey);
+    for (const w of waiting){
+      const unit = unitForPart(def, parts.indexOf(def));
+      let done = st.bins.some(b=> addToBin(b, unit, g, false));
+      if (!done) done = st.bins.some(b=> addToBin(b, unit, g, true));
+      if (!done){
+        for (const t of types){
+          if (stockLeft(st, t) < 1) continue;
+          const nb = newBin(t, g);
+          if (addToBin(nb, unit, g, false)){ st.bins.push(nb); done = true; break; }
+        }
+      }
+      if (!done) break;
+      st.unplaced = st.unplaced.filter(u=> u !== w);
+      placed++;
+    }
+    if (!placed) return { error: 'No room for ' + def.name + ' on any sheet, and no sheet in stock that can hold it.' };
+    return { ok: ()=> placed + ' x ' + def.name + ' put back' + (placed < waiting.length ? ' (' + (waiting.length - placed) + ' still have no room).' : '.') };
+  });
+}
+function layoutTidy(binIdx){
+  return layoutEdit(st=>{
+    const b = st.bins[binIdx];
+    if (!b) return { error: 'No such sheet.' };
+    const re = repackOneSheet(b.sheetType, b.placements.map(unitOf), editParams());
+    if (!re) return { error: 'Sheet ' + (binIdx + 1) + ' could not be re-packed any other way.' };
+    b.placements = re;
+    return { ok: ()=> 'Sheet ' + (binIdx + 1) + ' re-packed.' };
+  });
+}
+function layoutUndoLast(){
+  const st = currentStrategy();
+  if (!st || !layoutUndo.length) return;
+  const snap = layoutUndo.pop();
+  st.bins = snap.bins; st.unplaced = snap.unplaced;
+  settleLayout(st, snap.edited || layoutUndo.length > 0);
+  layoutToast('Undone.');
+}
+function layoutReset(){
+  const st = currentStrategy();
+  if (!st || !confirm('Throw away the hand edits and go back to the computed layout?')) return;
+  restoreComputed(st);
+  clearEditedLayout();
+  layoutUndo = []; layoutSel = null;
+  rerenderResults();
+  layoutToast('Back to the computed layout.');
+}
+
+/* ---- saved with the project ---- */
+// Anything that changes what a layout means: parts, sheets, gaps, openings.
+function layoutSignature(){
+  const r = lastRunParams || {};
+  return JSON.stringify({
+    p: parts.map(p=> [p.id, p.width, p.height, p.qty, !!p.rotate, partOpenings(p)]),
+    s: sheetTypes.map(st=> [st.id, st.width, st.height, st.qty]),
+    g: [r.partGap, r.borderGap, r.fillOpenings !== false],
+  });
+}
+function saveEditedLayout(){
+  const proj = getProject(currentProjectId), st = currentStrategy();
+  if (!proj || !st) return;
+  const tooBig = st.tooBig || [];
+  proj.editedLayout = {
+    sig: layoutSignature(), key: selectedStrategyKey, savedAt: Date.now(),
+    bins: st.bins.map(b=> ({ type: b.sheetType.id, p: b.placements.map(pl=> [pl.defId, +pl.x.toFixed(5), +pl.y.toFixed(5), pl.rotated ? 1 : 0]) })),
+    // [defId, 1 = taken off by hand / 0 = no stock left for it]
+    off: st.unplaced.filter(u=> !tooBig.includes(u)).map(u=> [u.defId, u.takenOff ? 1 : 0]),
+  };
+  persistAll();
+}
+function clearEditedLayout(){
+  const proj = getProject(currentProjectId);
+  if (proj && proj.editedLayout){ delete proj.editedLayout; persistAll(); }
+}
+// Called by runNesting(): bring back this project's hand edits if they still
+// describe the same job; otherwise drop them and say so.
+function restoreEditedLayout(){
+  const proj = getProject(currentProjectId), e = proj && proj.editedLayout;
+  if (!e) return;
+  const drop = ()=>{ delete proj.editedLayout; persistAll(); layoutNotice = 'Your hand edits to this layout were cleared because the parts, sheets or gaps changed.'; };
+  const st = strategyResults[e.key];
+  if (e.sig !== layoutSignature() || !st) return drop();
+  const g = editParams(), bins = [], count = {};
+  for (const sb of e.bins || []){
+    const type = sheetTypes.find(t=> t.id === sb.type);
+    if (!type) return drop();
+    const b = newBin(type, g);
+    for (const [defId, x, y, rot] of sb.p){
+      const def = parts.find(p=> p.id === defId);
+      if (!def) return drop();
+      b.placements.push(makePlacement(unitForPart(def, parts.indexOf(def)), x, y, !!rot));
+      count[defId] = (count[defId] || 0) + 1;
+    }
+    bins.push(b);
+  }
+  const off = (e.off || []).map(item=>{
+    const [defId, taken] = Array.isArray(item) ? item : [item, 1];
+    const def = parts.find(p=> p.id === defId);
+    if (!def) return null;
+    count[defId] = (count[defId] || 0) + 1;
+    const u = unitForPart(def, parts.indexOf(def)); if (taken) u.takenOff = true; return u;
+  });
+  if (off.includes(null)) return drop();
+  // Saved files can be edited or come from elsewhere: only a layout with no
+  // overlaps and nothing past the border is accepted.
+  if (!bins.every(b=> binLooksValid(b, g))) return drop();
+  (st.tooBig || []).forEach(u=> { count[u.defId] = (count[u.defId] || 0) + 1; });
+  // Every part accounted for exactly, or the saved layout is not trusted.
+  if (parts.some(p=> isValidDims(p.width, p.height) && (count[p.id] || 0) !== (p.qty || 0))) return drop();
+  st.bins = bins;
+  st.unplaced = off.concat(st.tooBig || []);
+  selectedStrategyKey = e.key;
+  const per = {};
+  st.bins.forEach(b=>{ per[b.sheetType.id] = (per[b.sheetType.id] || 0) + 1; b.indexInType = per[b.sheetType.id]; });
+  Object.assign(st, strategyStats(st.bins, st.unplaced));
+  st.edited = true; st.noOpenings = null; st.search = null;
+}
+
+function binLooksValid(b, g){
+  const eps = 1e-6, P = b.placements;
+  for (const p of P){
+    if (p.x < g.border - eps || p.y < g.border - eps || p.x + p.w > b.w - g.border + eps || p.y + p.h > b.h - g.border + eps) return false;
+  }
+  const inOpening = (h, q)=> (h.openings || []).some(o=> q.x >= h.x + o.x + g.gap - eps && q.y >= h.y + o.y + g.gap - eps
+    && q.x + q.w <= h.x + o.x + o.w - g.gap + eps && q.y + q.h <= h.y + o.y + o.h - g.gap + eps);
+  for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++){
+    const a = P[i], c = P[j];
+    const apart = c.x >= a.x + a.w + g.gap - eps || a.x >= c.x + c.w + g.gap - eps || c.y >= a.y + a.h + g.gap - eps || a.y >= c.y + c.h + g.gap - eps;
+    if (!apart && !inOpening(a, c) && !inOpening(c, a)) return false;
+  }
+  return true;
+}
+
+/* ---- selecting and the button bar ---- */
+function layoutSelect(binIdx, pl){
+  const st = currentStrategy();
+  if (!st) return;
+  const prev = layoutSel;
+  layoutSel = pl ? { bin: binIdx, pl } : null;
+  st.bins.forEach(b=> delete b._sel);
+  if (layoutSel) st.bins[binIdx]._sel = st.bins[binIdx].placements.indexOf(pl);
+  [prev && prev.bin, layoutSel && layoutSel.bin].forEach(i=>{ if (i != null && sheetCardEls[i]) sheetCardEls[i]._redraw(); });
+  renderLayoutBar();
+}
+function renderLayoutBar(){
+  const bar = document.getElementById('layoutBar');
+  const st = currentStrategy();
+  const sel = layoutSel;
+  if (!sel || !st || !st.bins[sel.bin] || !st.bins[sel.bin].placements.includes(sel.pl) || currentStep !== 3){
+    bar.classList.remove('open'); document.body.classList.remove('layout-bar-open'); bar.innerHTML = '';
+    return;
+  }
+  const pl = sel.pl, def = parts.find(p=> p.id === pl.defId);
+  const size = def ? def.width + '" × ' + def.height + '"' : pl.w + '" × ' + pl.h + '"';
+  const others = st.bins.map((b, i)=> i).filter(i=> i !== sel.bin);
+  const types = strategySheetTypes(selectedStrategyKey).filter(t=> stockLeft(st, t) > 0);
+  let moveHtml;
+  if (others.length <= 8){
+    moveHtml = others.map(i=> `<button class="big" data-lb-move="${i}">Sheet ${i + 1}</button>`).join('');
+  } else {
+    moveHtml = `<select id="lbMoveSel">${others.map(i=> `<option value="${i}">Sheet ${i + 1} - ${escHtml(st.bins[i].sheetType.name)}</option>`).join('')}</select>
+                <button class="big" id="lbMoveGo">Move</button>`;
+  }
+  const newHtml = !types.length ? ''
+    : types.length === 1 ? `<button class="big" data-lb-new="${types[0].id}">+ New sheet</button>`
+    : `<select id="lbNewSel">${types.map(t=> `<option value="${t.id}">${escHtml(t.name)}</option>`).join('')}</select><button class="big" id="lbNewGo">+ New sheet</button>`;
+  bar.innerHTML = `
+    <div class="lb-title">${escHtml(plTag(pl) + ' ' + pl.name)} &middot; ${size} &middot; on Sheet ${sel.bin + 1}</div>
+    <div class="lb-row">
+      <span class="lb-label">Move to</span>${moveHtml}${newHtml}
+      <span style="flex:1"></span>
+      <button class="big danger" id="lbTakeOff">Take off sheet</button>
+      <button class="big primary" id="lbDone">Done</button>
+    </div>`;
+  bar.classList.add('open'); document.body.classList.add('layout-bar-open');
+  bar.querySelectorAll('[data-lb-move]').forEach(b=> b.addEventListener('click', ()=> layoutMove(sel.bin, pl, parseInt(b.dataset.lbMove, 10))));
+  bar.querySelectorAll('[data-lb-new]').forEach(b=> b.addEventListener('click', ()=> layoutMove(sel.bin, pl, { newSheet: b.dataset.lbNew })));
+  const go = bar.querySelector('#lbMoveGo');
+  if (go) go.addEventListener('click', ()=> layoutMove(sel.bin, pl, parseInt(bar.querySelector('#lbMoveSel').value, 10)));
+  const ng = bar.querySelector('#lbNewGo');
+  if (ng) ng.addEventListener('click', ()=> layoutMove(sel.bin, pl, { newSheet: bar.querySelector('#lbNewSel').value }));
+  bar.querySelector('#lbTakeOff').addEventListener('click', ()=> layoutTakeOff(sel.bin, pl));
+  bar.querySelector('#lbDone').addEventListener('click', ()=> layoutSelect(null, null));
+}
+let layoutToastTimer = null;
+function layoutToast(msg, bad){
+  const t = document.getElementById('layoutToast');
+  t.textContent = msg;
+  t.classList.toggle('bad', !!bad);
+  t.classList.add('show');
+  clearTimeout(layoutToastTimer);
+  layoutToastTimer = setTimeout(()=> t.classList.remove('show'), bad ? 6000 : 3500);
+}
+document.addEventListener('keydown', e=>{ if (e.key === 'Escape' && layoutSel) layoutSelect(null, null); });
+
+// The topmost (smallest) part under a point on a sheet card's canvas.
+function placementAt(view, fx, fy){
+  let hit = -1, area = Infinity;
+  view.placements.forEach((p, i)=>{
+    if (fx >= p.x && fx <= p.x + p.w && fy >= p.y && fy <= p.y + p.h && p.w*p.h < area){ hit = i; area = p.w*p.h; }
+  });
+  return hit;
 }
 
 function statBlock(num, lbl, cls){
@@ -4183,7 +4628,10 @@ function buildSheetCard(bin, globalIndex){
   head.innerHTML = `
     <div class="name">Sheet ${globalIndex+1} &middot; ${escHtml(bin.sheetType.name)} (#${bin.indexInType})</div>
     <div class="meta">${bin.w}" &times; ${bin.h}" &nbsp;|&nbsp; ${bin.placements.length} parts &nbsp;|&nbsp; ${eff.toFixed(1)}% used</div>
-    <button class="small ghost" data-png="1">Download PNG</button>
+    <span style="display:flex; gap:8px;">
+      <button class="small" data-tidy="1" title="Re-pack this sheet's parts; nothing leaves the sheet">Tidy this sheet</button>
+      <button class="small ghost" data-png="1">Download PNG</button>
+    </span>
   `;
   card.appendChild(head);
 
@@ -4195,6 +4643,18 @@ function buildSheetCard(bin, globalIndex){
   card.appendChild(wrap);
 
   drawSheet(canvas, view, globalIndex+1, eff);
+  card._redraw = ()=> drawSheet(canvas, plan.rotate ? rotatedBinView(bin) : bin, globalIndex+1, eff);
+  sheetCardEls[globalIndex] = card;
+  // Tap a part to select it; tap it again (or empty sheet) to let go.
+  canvas.addEventListener('click', e=>{
+    const r = canvas.getBoundingClientRect();
+    const v = plan.rotate ? rotatedBinView(bin) : bin;
+    const i = placementAt(v, (e.clientX - r.left) / r.width * v.w, (e.clientY - r.top) / r.height * v.h);
+    const pl = i >= 0 ? bin.placements[i] : null;
+    if (!pl || (layoutSel && layoutSel.pl === pl)) layoutSelect(null, null);
+    else layoutSelect(globalIndex, pl);
+  });
+  head.querySelector('[data-tidy]').addEventListener('click', ()=> layoutTidy(globalIndex));
 
   if (plan.rotate || plan.forced){
     const note = document.createElement('div');
@@ -4230,9 +4690,12 @@ function buildSheetCard(bin, globalIndex){
   }
 
   head.querySelector('[data-png]').addEventListener('click', ()=>{
+    // Saved without the on-screen selection highlight.
+    bin._plain = true; card._redraw();
     const a = document.createElement('a');
     a.download = 'sheet-'+(globalIndex+1)+'.png';
     a.href = canvas.toDataURL('image/png');
+    delete bin._plain; card._redraw();
     a.click();
   });
 
@@ -4350,6 +4813,17 @@ function drawSheet(canvas, bin, sheetNumber, eff){
     }
     ctx.restore();
   });
+
+  // The part picked for moving, outlined so it can't be missed.
+  if (bin._sel != null && bin.placements[bin._sel] && !exportRenderScale && !bin._plain){
+    const p = bin.placements[bin._sel];
+    ctx.save();
+    ctx.fillStyle = 'rgba(239,92,176,0.22)';
+    ctx.fillRect(p.x*scale, p.y*scale, p.w*scale, p.h*scale);
+    ctx.strokeStyle = '#ef5cb0'; ctx.lineWidth = 4;
+    ctx.strokeRect(p.x*scale + 2, p.y*scale + 2, p.w*scale - 4, p.h*scale - 4);
+    ctx.restore();
+  }
 
   // Title block (light). Never on top of a part: it is only drawn where the
   // corner is clear, and never in a PDF, whose page header already says it.
@@ -4837,9 +5311,13 @@ async function buildNestingPdf(mode, audienceKey, trace){
       notes.push({ text: 'Too big for every sheet, not nested: ' + oversizedParts.map(p => p.name + ' (' + p.width + '" × ' + p.height + '") x ' + p.qty).join(', ') + '.', bold: true, rgb: PDF_RED });
     }
     const tooBig = s.tooBig || [], outBy = {};
-    s.unplaced.filter(u => !tooBig.includes(u)).forEach(u => { outBy[u.name] = (outBy[u.name] || 0) + 1; });
+    s.unplaced.filter(u => !tooBig.includes(u) && !u.takenOff).forEach(u => { outBy[u.name] = (outBy[u.name] || 0) + 1; });
     const outList = Object.entries(outBy).map(([n, c]) => n + ' x ' + c).join(', ');
     if (outList) notes.push({ text: 'Sheet stock ran out, not placed: ' + outList + '.', bold: true, rgb: PDF_RED });
+    const offBy = {};
+    s.unplaced.filter(u => u.takenOff).forEach(u => { offBy[u.name] = (offBy[u.name] || 0) + 1; });
+    const offList = Object.entries(offBy).map(([n, c]) => n + ' x ' + c).join(', ');
+    if (offList) notes.push({ text: 'Taken off the sheets by hand, not on any sheet: ' + offList + '.', bold: true, rgb: PDF_RED });
     if ((isShop || costs.material == null) && usedTypes.length) notes.push({ text: 'Material to pull: ' + usedTypes.map(st => usage[st.id] + ' × ' + st.name + ' (' + st.width + '" × ' + st.height + '")').join(', ') + '.' });
     if (nested > 0) notes.push({ text: 'Cut order: ' + nested + ' part' + (nested === 1 ? ' sits' : 's sit') + ' inside another part\'s opening (dashed) - cut them before that opening.' });
     if (isInt){
@@ -5293,7 +5771,7 @@ async function exportPdf(mode, btn){
   if (btn){ btn.disabled = true; btn.textContent = 'Building PDF…'; }
   try {
     await new Promise(r => setTimeout(r, 30));
-    const audience = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'internal';
+    const audience = PDF_AUDIENCES[reportPrefs.audience] ? reportPrefs.audience : 'shop';
     const doc = await buildNestingPdf(mode, audience);
     const bytes = new Uint8Array(doc.output('arraybuffer'));
     const proj = getProject(currentProjectId);
@@ -5343,7 +5821,8 @@ document.getElementById('btnExport').addEventListener('click', ()=>{
   saveWorkingIntoCurrentProject();
   const proj = getProject(currentProjectId);
   const payload = JSON.stringify({
-    name: proj.name, sheetTypes: proj.sheetTypes, parts: proj.parts, settings: proj.settings
+    name: proj.name, sheetTypes: proj.sheetTypes, parts: proj.parts, settings: proj.settings,
+    editedLayout: proj.editedLayout || undefined
   }, null, 2);
   const blob = new Blob([payload], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -5416,6 +5895,8 @@ document.getElementById('importFile').addEventListener('change', (e)=>{
         createdAt: Date.now(),
         sheetTypes: (data.sheetTypes||[]).map((s,i)=> sanitizeImportedSheetType(s, i)),
         parts: (data.parts||[]).map((p,i)=> sanitizeImportedPart(p, i)),
+        // Checked against the job (and for overlaps) before it is ever shown.
+        editedLayout: (data.editedLayout && typeof data.editedLayout === 'object' && !Array.isArray(data.editedLayout)) ? data.editedLayout : undefined,
         settings: Object.assign(defaultSettings(), data.settings || {
           partGap: data.partGap, borderGap: data.borderGap, defaultRotate: data.defaultRotate, quality: data.quality
         })

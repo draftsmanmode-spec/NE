@@ -18,6 +18,7 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - Drawing: `drawSheet`, `drawSheetThumb`, `rotatedBinView`; PDF: `buildNestingPdf(mode, audience)` with `PDF_AUDIENCES` (internal / shop / customer)
 - Money: `jobCosts` (material + cutting, markup, all in cents); big jobs: `SEARCH_BUDGET_MS`, oversized parts: `fitsSomeSheet` / `oversizedParts`
 - Split mode: `dxfSplitNested` (containment) with `dxfClusterRuns` (bbox) as fallback; cut path: `dxfCutStats`, `partCut`, `cutTotals`
+- Shop editing: `LAYOUT EDITING` section — `layoutMove` / `layoutTakeOff` / `layoutPutBack` / `layoutTidy` / `layoutUndoLast` / `layoutReset`; results drawn only by `rerenderResults`
 
 ## Rules that matter
 - Nesting is **bounding-box (rectangles) only**, by design. Openings are offered as
@@ -32,6 +33,10 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
   remainder, summing exactly to the quote). Tests check this via `buildNestingPdf`'s `trace`.
 - Company details live in `localStorage` (`nestingEstimatorBusiness_v1`, logo separately); quote customer/number per project settings.
 - PDF text must use the embedded font subset: ASCII plus `°·×²½¼¾–—‘’“”•…✓` (see tools/make_pdf_fonts.py).
+- Every hand edit goes through `layoutEdit()` (snapshot, validate, restore on refusal) and `settleLayout()`;
+  placements are made only by `makePlacement()`. Saved edits (`proj.editedLayout`) are trusted only if the
+  job signature matches, every part is accounted for, and `binLooksValid` passes.
+- The shop uses this: big buttons, plain words, no jargon; quoting tools stay behind `reportPrefs.quoting`.
 - No bundler, no npm deps in the app. Keep it one file that works from `file://` and offline.
 - Saved projects live in `localStorage`; new part fields must survive `sanitizeImportedPart`.
 

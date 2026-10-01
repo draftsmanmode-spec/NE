@@ -72,7 +72,18 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] `save_pdf` (Rust) takes an optional file-type filter so the CSV saves as CSV (verified against tauri-plugin-dialog 2.7 source; Linux cargo check can't run here: no GTK)
 - [x] Tests: letterhead, logo embedded, prices on/off, sign-off, CSV, persistence, tiny-parts pricing (75 checks)
 
+## Done — Shop-floor layout editing (2026-10-01)
+- [x] Results: tap a part -> big bottom bar: Move to Sheet N / + New sheet / Take off sheet / Done (Esc closes)
+- [x] "Not on a sheet" tray at the top with big "Put one back" / "Put all back"; "Tidy this sheet" per sheet; Undo and Reset layout
+- [x] Every change stays valid: a part lands only where it fits with the gap kept (target sheet re-packed if needed), stock limits hold, a refused change leaves everything as it was and says why
+- [x] Hand edits saved with the project (and in Export JSON), cleared with a notice when parts/sheets/gaps change; saved layouts are re-checked for overlaps before being shown
+- [x] PDF and cut list follow the edits; parts taken off are reported as such, stock shortages stay shortages
+- [x] Results opens on the report (no popup), big export buttons at the top, PDF defaults to Shop; quoting tools hidden behind "Show quoting tools"
+- [x] Tests: UI-driven move / take off / put back / tidy / undo / reset, refused moves, persistence, JSON round trip, tampered layout, 150 random edits (98 checks)
+
 ## Next candidates
+- [ ] Rotate a single part by hand (turn 90 degrees in place when there is room)
+- [ ] Drag a part to a spot on the same sheet (today: tidy re-packs the whole sheet)
 - [ ] Common-line cuts could subtract shared edges from the cut path
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants
 - [ ] Identical shapes drawn rotated 90 deg in one file are not merged yet (only same orientation)
