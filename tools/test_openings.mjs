@@ -53,6 +53,8 @@ const paths = Object.entries(files).map(([name, body]) => {
   return p;
 });
 
+const fmtMoneyNode = v => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const has = (t, ...w) => w.every(x => t.includes(x)), lacks = (t, ...w) => w.every(x => !t.includes(x));
 let failures = 0;
 const check = (ok, msg) => { console.log((ok ? 'PASS ' : 'FAIL ') + msg); if (!ok) failures++; };
 
@@ -502,6 +504,76 @@ check(Math.abs(cutRes.t.minutes - 3.1733) < 0.001 && Math.abs(cutRes.t.cost - 6.
 check(cutRes.kept, 'laser rates are saved with the project');
 check(cutRes.real && cutRes.resized, 'DXF cut path is used as read, and falls back to the estimate after a resize');
 
+// ---- quote letterhead, per-part prices, shop sign-off, CSV cut list ------
+const qt = await page.evaluate(async () => {
+  const out = {};
+  parts = [{ id: nextId(), name: 'Gate, frame', width: 30, height: 20, qty: 2, rotate: true, color: null },
+           { id: nextId(), name: 'Tab', width: 6, height: 5, qty: 10, rotate: true, color: null }];
+  setPartOpenings(parts[0], [frameOpening(30, 20, 2)]);
+  sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
+  document.getElementById('markupPct').value = '20';
+  // Company details are one profile for every project; quote fields are per project.
+  document.getElementById('bizCompany').value = 'Acme Metal Works';
+  document.getElementById('bizContact').value = '555-0100 · quotes@acme.test';
+  document.getElementById('bizAddress').value = '1 Forge Rd, Steelton';
+  document.getElementById('bizTerms').value = 'Net 30. Material subject to availability.';
+  document.getElementById('bizValidDays').value = '14';
+  ['bizCompany','bizContact','bizAddress','bizTerms','bizValidDays'].forEach(id => document.getElementById(id).dispatchEvent(new Event('input')));
+  // A tiny red logo.
+  const c = document.createElement('canvas'); c.width = 40; c.height = 20;
+  const g = c.getContext('2d'); g.fillStyle = '#c00'; g.fillRect(0, 0, 40, 20);
+  business.logo = c.toDataURL('image/png'); business.logoW = 40; business.logoH = 20; saveBusiness(); syncLogoUI();
+  document.getElementById('quoteCustomer').value = 'Bob Builder';
+  document.getElementById('quoteNumber').value = '';
+  document.getElementById('quotePartPrices').checked = true;
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const t1 = [], d1 = await buildNestingPdf('report', 'customer', t1);
+  out.cust = t1.join(' | ');
+  out.images = (d1.output().match(/\/Subtype \/Image/g) || []).length;
+  out.autoNumber = autoQuoteNumber(getProject(currentProjectId));
+  document.getElementById('quotePartPrices').checked = false;
+  const t2 = []; await buildNestingPdf('report', 'customer', t2);
+  out.custNoParts = t2.join(' | ');
+  document.getElementById('quotePartPrices').checked = true;
+  const t3 = []; await buildNestingPdf('report', 'shop', t3);
+  out.shop = t3.join(' | ');
+  out.csv = buildCutListCsv();
+  // persistence
+  document.getElementById('quoteCustomer').value = 'Carol'; saveWorkingIntoCurrentProject();
+  loadProjectIntoWorking(currentProjectId);
+  out.keptCustomer = document.getElementById('quoteCustomer').value;
+  loadBusiness();
+  out.keptCompany = document.getElementById('bizCompany').value;
+  out.keptLogo = !!business.logo;
+  business.logo = null; saveBusiness();
+  document.getElementById('markupPct').value = ''; saveWorkingIntoCurrentProject();
+  return out;
+});
+check(has(qt.cust, 'Acme Metal Works', '555-0100 · quotes@acme.test', '1 Forge Rd, Steelton', 'Quotation', qt.autoNumber, 'VALID UNTIL', 'PREPARED FOR', 'Bob Builder', 'Terms', 'Net 30.')
+  && qt.images >= 1, `customer quote letterhead: company, contact, logo, quote ${qt.autoNumber}, valid-until, customer, terms`);
+check(has(qt.cust, 'Unit price') && lacks(qt.custNoParts, 'Unit price') && has(qt.custNoParts, 'Material'), 'per-part prices can be switched off (then material / cutting lines)');
+check(has(qt.shop, 'Cut by', 'Checked') && lacks(qt.shop, '$'), 'shop sheets carry a sign-off line (and still no prices)');
+const csvRows = qt.csv.replace(/^﻿/, '').trim().split('\r\n');
+check(csvRows[0] === 'Sheet,Material,Sheet W,Sheet H,Tag,Part,W,H,X from left,Y from top,Rotated,Inside opening of' && csvRows.length === 13
+  && csvRows.some(r => r.includes('"Gate, frame"')) && csvRows.filter(r => /,#1$/.test(r)).length === 10,
+  `CSV cut list: header, 12 placements, quoted names, tabs marked inside frame #1 (${csvRows.length - 1} rows)`);
+check(qt.keptCustomer === 'Carol' && qt.keptCompany === 'Acme Metal Works' && qt.keptLogo, 'quote fields saved per project; company details and logo saved once');
+
+// Hundreds of tiny parts on one cheap sheet: whole-cent allocation keeps the
+// quote exact (rounding each unit price to the cent would make it $0.00).
+const washers = await page.evaluate(() => {
+  parts = [{ id: nextId(), name: 'Washer', width: 1, height: 1, qty: 400, rotate: true, color: null }];
+  sheetTypes = [{ id: nextId(), name: '24x24', width: 24, height: 24, qty: null, cost: 4 }];
+  document.getElementById('markupPct').value = '20';
+  ['cutSpeed', 'pierceSec', 'laserRate'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('partGap').value = '0.1'; document.getElementById('borderGap').value = '0.2';
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const s = strategyResults[selectedStrategyKey], c = jobCosts(s, s.bins);
+  document.getElementById('markupPct').value = ''; saveWorkingIntoCurrentProject();
+  return { sheets: s.sheets, quote: c.quote, lineTotal: c.lines[0].total, unit: fmtUnitPrice(c.lines[0].unit) };
+});
+check(washers.sheets === 1 && washers.quote === 4.8 && washers.lineTotal === 4.8 && washers.unit === '$0.0120', `400 tiny parts on a $4 sheet at 20%: quote $4.80, unit price ${washers.unit}`);
+
 // ---- money, oversized parts, big jobs, export audiences ----------------
 const ex = await page.evaluate(async () => {
   const out = {};
@@ -518,7 +590,7 @@ const ex = await page.evaluate(async () => {
   out.nest = { sheets: s.sheets, unplaced: s.unplaced.length, strategies: Object.keys(strategyResults).length };
   out.oversizedNote = (document.getElementById('oversizedNote') || {}).textContent || '';
   const c = jobCosts(s, s.bins);
-  out.costs = { material: c.material, cutting: +c.cutting.toFixed(4), quote: +c.quote.toFixed(4) };
+  out.costs = { material: c.material, cutting: +c.cutting.toFixed(4), quote: +c.quote.toFixed(4), lines: c.lines, fmt: fmtMoney(c.quote) };
   out.quoteOnScreen = document.getElementById('reportBody').textContent.includes(fmtMoney(c.quote));
   tryHarder(0.25, 0.5, 2);
   await new Promise(r => setTimeout(r, 1500));
@@ -552,17 +624,18 @@ check(ex.nest.sheets === 2 && ex.nest.unplaced === 1 && ex.nest.strategies > 0 &
   'a part too big for every sheet is held back and named; everything else still nests');
 check(/No better layout/.test(ex.afterTry.note) && ex.afterTry.unplaced === 1, 'Try harder does not count the held-back part as an improvement');
 // 2 sheets x $40 = $80; 588 in / 200 + 14 s = 3.1733 min x $120/h = $6.3467; x 1.35
-check(ex.costs.material === 80 && ex.costs.cutting === 6.35 && ex.costs.quote === 116.57 && ex.quoteOnScreen,
-  `customer quote = (material + cutting) x markup: ($80 + $6.35) x 1.35 = $${ex.costs.quote.toFixed(2)}`);
-// The customer's price lines must add up to the printed total, to the cent.
-const priceBlock = ex.customer.text.split('| Price |')[1].split('| Total |');
-const lineSum = (priceBlock[0].match(/\$[\d,]+\.\d\d/g) || []).reduce((a, v) => a + Math.round(parseFloat(v.slice(1).replace(/,/g, '')) * 100), 0);
-const printedTotal = Math.round(parseFloat(priceBlock[1].match(/\$([\d,]+\.\d\d)/)[1].replace(/,/g, '')) * 100);
-check(lineSum === printedTotal, `customer price lines add up to the total ($${(lineSum / 100).toFixed(2)} = $${(printedTotal / 100).toFixed(2)})`);
-const has = (t, ...w) => w.every(x => t.includes(x)), lacks = (t, ...w) => w.every(x => !t.includes(x));
-check(has(ex.internal.text, 'Costs', 'Laser cutting', 'Markup 35%', 'Customer quote', '$116.57', 'EFFICIENCY', 'Monster'),
+// Quote = sum of per-part lines (each unit price rounded first), within a few
+// cents of (material + cutting) x markup = ($80 + $6.35) x 1.35 = $116.57.
+const lc = l => Math.round(l * 100);
+const linesOk = ex.costs.lines.every(l => Math.abs(l.unit * l.qty - l.total) < 1e-9);
+const linesSum = ex.costs.lines.reduce((a, l) => a + lc(l.total), 0);
+check(ex.costs.material === 80 && ex.costs.cutting === 6.35 && linesOk && linesSum === lc(ex.costs.quote) && ex.costs.quote === 116.57 && ex.quoteOnScreen,
+  `customer quote = ($80 + $6.35) x 1.35 = ${ex.costs.fmt}, and its part lines add up to it exactly (${ex.costs.lines.map(l => l.qty + ' parts $' + l.total.toFixed(2)).join(' + ')})`);
+check(ex.costs.lines.every(l => ex.customer.text.includes(fmtMoneyNode(l.total))) && ex.customer.text.includes('Unit price'),
+  'customer PDF prints every line total');
+check(has(ex.internal.text, 'Costs', 'Laser cutting', 'Markup 35%', 'Customer quote', ex.costs.fmt, 'EFFICIENCY', 'Monster'),
   'internal PDF: full cost breakdown, efficiency and warnings');
-check(has(ex.customer.text, 'Quotation', 'QUOTE TOTAL', '$116.57', 'Not included in this quote: Monster x 1', '2 | PART TYPES')
+check(has(ex.customer.text, 'Quotation', 'QUOTE TOTAL', ex.costs.fmt, 'Not included in this quote: Monster x 1', '2 | PART TYPES')
   && lacks(ex.customer.text, 'Markup', 'MARKUP', 'EFFICIENCY', 'Cut order', '$80.00', '#1', 'Sheet 1', 'Monster (') && ex.customer.pages === 1 && ex.customer.links === 0,
   'customer PDF: price and parts only - no markup, efficiency, internal cost, tags or sheets');
 check(has(ex.shop.text, 'Cut sheets', 'Material to pull', 'Cut order', 'Back to summary', 'Sheet 1 of 2') && lacks(ex.shop.text, '$', 'Markup', 'EFFICIENCY'),

@@ -28,7 +28,9 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - Openings reach the packer only through `unitForPart()`, gated by the project switch `nestOpeningsEnabled`.
 - One 90° rotation convention everywhere: local (u,v) → (H − v, u). Packer and `rotatedBinView` must agree.
 - PDF audiences: the shop PDF never prints a price, the customer PDF never shows cost, markup, efficiency or sheets.
-  Every money figure comes from `jobCosts` so printed lines add up. Tests check this via `buildNestingPdf`'s `trace`.
+  Every money figure comes from `jobCosts` so printed lines add up (per-part lines get whole cents by largest
+  remainder, summing exactly to the quote). Tests check this via `buildNestingPdf`'s `trace`.
+- Company details live in `localStorage` (`nestingEstimatorBusiness_v1`, logo separately); quote customer/number per project settings.
 - PDF text must use the embedded font subset: ASCII plus `°·×²½¼¾–—‘’“”•…✓` (see tools/make_pdf_fonts.py).
 - No bundler, no npm deps in the app. Keep it one file that works from `file://` and offline.
 - Saved projects live in `localStorage`; new part fields must survive `sanitizeImportedPart`.

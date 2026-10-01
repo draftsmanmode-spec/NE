@@ -63,8 +63,16 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Fix: PDF remnant table always said "Sheet 1"
 - [x] Tests: quote math and rounding, oversized part, Try harder, time budget, what each audience PDF must and must not say, links (69 checks)
 
+## Done — Quote letterhead, per-part prices, shop checklist, CSV (2026-10-01)
+- [x] "Quote & company details" (Results step): company, contact, address, terms, valid-for days, logo (saved once, own storage key, size-capped); per project: customer, quote number (auto `Q-yymmdd-nnn`)
+- [x] Customer quote: letterhead, Quotation + number, date / valid until / prepared for / project, terms; company + quote number in the footer
+- [x] Per-part prices (switchable): material share by area + cutting share by machine time, marked up; whole cents allocated so lines add up exactly to (material + cutting) x markup; unit prices show 4 places when not whole cents
+- [x] Shop sheets: a tick box per part on every sheet and a "Cut by / Date / Checked" sign-off line
+- [x] Cut list CSV: sheet, material, tag, part, size, X/Y on the sheet, rotated, inside which frame's opening; Excel-friendly (BOM, CRLF, quoted)
+- [x] `save_pdf` (Rust) takes an optional file-type filter so the CSV saves as CSV (verified against tauri-plugin-dialog 2.7 source; Linux cargo check can't run here: no GTK)
+- [x] Tests: letterhead, logo embedded, prices on/off, sign-off, CSV, persistence, tiny-parts pricing (75 checks)
+
 ## Next candidates
-- [ ] Customer quote: optional terms/validity line and company header (logo, contact) from a settings field
 - [ ] Common-line cuts could subtract shared edges from the cut path
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants
 - [ ] Identical shapes drawn rotated 90 deg in one file are not merged yet (only same orientation)

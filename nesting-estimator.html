@@ -852,6 +852,34 @@
           <span class="small" id="paperNote" style="color:var(--text-faint);"></span>
         </div>
       </details>
+      <details class="card" id="quoteDetailsCard" style="margin-bottom:18px;">
+        <summary style="cursor:pointer; font-family:var(--display); font-weight:600; font-size:13px; list-style:none; display:flex; align-items:center; gap:8px;">
+          <span style="color:var(--purple);">&#9998;</span> Quote &amp; company details <span class="count" style="font-weight:400;">printed on the customer quote PDF</span>
+        </summary>
+        <div class="settings-grid" style="margin-top:12px;">
+          <div class="checkline" style="margin:0;"><label class="small" style="margin:0;"><b>Your company</b> &mdash; saved once, used on every project</label></div>
+          <div><label class="small">Company name</label><input type="text" id="bizCompany" placeholder="e.g. MNR Custom Metal"></div>
+          <div><label class="small">Phone / email</label><input type="text" id="bizContact" placeholder="e.g. (555) 010-0199 · quotes@example.com"></div>
+          <div><label class="small">Address</label><input type="text" id="bizAddress" placeholder="Street, City, State ZIP"></div>
+          <div><label class="small">Quote valid for (days)</label><input type="number" id="bizValidDays" min="0" step="1" placeholder="30"></div>
+          <div style="grid-column:1/-1;"><label class="small">Terms (printed at the bottom of the quote)</label><textarea id="bizTerms" style="height:56px; font-size:12.5px;" placeholder="e.g. Prices in USD. 50% deposit to start. Material subject to availability."></textarea></div>
+          <div style="grid-column:1/-1; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <label class="small" style="margin:0;">Logo</label>
+            <button class="small" id="bizLogoBtn">Choose image&hellip;</button>
+            <button class="small ghost danger" id="bizLogoClear" style="display:none;">Remove</button>
+            <img id="bizLogoPreview" alt="" style="display:none; max-height:36px; max-width:160px; background:#fff; border-radius:4px; padding:2px;">
+            <input type="file" id="bizLogoFile" accept="image/png,image/jpeg" style="display:none">
+            <span class="small" id="bizLogoNote" style="color:var(--text-faint);">PNG or JPG, shown at the top left of the quote.</span>
+          </div>
+          <div class="checkline" style="margin:6px 0 0 0;"><label class="small" style="margin:0;"><b>This project</b></label></div>
+          <div><label class="small">Customer</label><input type="text" id="quoteCustomer" placeholder="Who the quote is for"></div>
+          <div><label class="small">Quote number</label><input type="text" id="quoteNumber" placeholder=""></div>
+          <div class="checkline" style="margin:0;">
+            <input type="checkbox" id="quotePartPrices" checked>
+            <label class="small">Show a price for every part on the quote<span class="hint" tabindex="0">?<span class="hint-bubble">Each part gets its share of the material (by the area it uses) and of the cutting (by its cut length and pierces), with your markup. Unit price &times; qty = line total, and the lines add up exactly to the quote total.</span></span></label>
+          </div>
+        </div>
+      </details>
       <div id="results"></div>
     </section>
 
@@ -935,7 +963,8 @@ function sampleData(){
   };
 }
 function defaultSettings(){
-  return { partGap:0.25, borderGap:0.5, defaultRotate:true, fillOpenings:true, quality:2, markupPct:'', cutSpeed:'', pierceSec:'', laserRate:'' };
+  return { partGap:0.25, borderGap:0.5, defaultRotate:true, fillOpenings:true, quality:2, markupPct:'', cutSpeed:'', pierceSec:'', laserRate:'',
+           quoteCustomer:'', quoteNumber:'', quotePartPrices:true };
 }
 
 function getProject(id){ return projects.find(p=>p.id===id); }
@@ -971,7 +1000,10 @@ function saveWorkingIntoCurrentProject(){
     markupPct: document.getElementById('markupPct').value,
     cutSpeed: document.getElementById('cutSpeed').value,
     pierceSec: document.getElementById('pierceSec').value,
-    laserRate: document.getElementById('laserRate').value
+    laserRate: document.getElementById('laserRate').value,
+    quoteCustomer: document.getElementById('quoteCustomer').value,
+    quoteNumber: document.getElementById('quoteNumber').value,
+    quotePartPrices: document.getElementById('quotePartPrices').checked
   };
   persistAll();
 }
@@ -989,6 +1021,10 @@ function loadProjectIntoWorking(id){
   document.getElementById('fillOpenings').checked = s.fillOpenings !== false;
   document.getElementById('markupPct').value = s.markupPct;
   ['cutSpeed','pierceSec','laserRate'].forEach(id => { document.getElementById(id).value = s[id] != null ? s[id] : ''; });
+  document.getElementById('quoteCustomer').value = s.quoteCustomer || '';
+  document.getElementById('quoteNumber').value = s.quoteNumber || '';
+  document.getElementById('quotePartPrices').checked = s.quotePartPrices !== false;
+  document.getElementById('quoteNumber').placeholder = autoQuoteNumber(proj);
   qualitySlider.value = s.quality;
   updateQualityNote();
   currentProjectId = id;
@@ -2182,8 +2218,45 @@ function jobCosts(s, bins){
   const subtotal = material != null ? cents(material + (cutting || 0)) : null;
   const m = parseFloat(document.getElementById('markupPct').value);
   const markupPct = m > 0 ? m : 0;
-  const quote = subtotal != null && markupPct > 0 ? cents(subtotal * (1 + markupPct/100)) : null;
-  return { cut, material, cutting, subtotal, markupPct, quote, markup: quote != null ? cents(quote - subtotal) : 0 };
+  // Per-part sell prices: each placed part's share of the material (by the
+  // area it uses) and of the cutting (by its machine time), marked up. The
+  // total is (material + cutting) x markup rounded once; whole cents are then
+  // handed out to the lines (largest remainder), so the lines add up to it
+  // exactly however small or numerous the parts. Unit price = line / qty.
+  let lines = null, sell = null;
+  if (subtotal != null){
+    const k = 1 + markupPct/100, ls = laserSettings();
+    const by = new Map();
+    (bins || []).forEach(b=> b.placements.forEach(pl=>{
+      const r = by.get(pl.defId) || { id: pl.defId, qty: 0, area: 0, min: 0 };
+      r.qty++; r.area += placedArea(pl); by.set(pl.defId, r);
+    }));
+    by.forEach(r=>{
+      const def = parts.find(p=> p.id === r.id), c = def ? partCut(def) : null;
+      if (c && ls) r.min = r.qty * (c.length / ls.speed + c.pierces * ls.pierceSec / 60);
+    });
+    const totA = [...by.values()].reduce((a, r)=> a + r.area, 0), totM = [...by.values()].reduce((a, r)=> a + r.min, 0);
+    sell = cents(subtotal * k);
+    const raw = [...by.values()].map(r=>{
+      const share = (totA > 0 ? material * r.area / totA : 0) + (cutting && totM > 0 ? cutting * r.min / totM : 0);
+      const exact = share * k * 100;   // in cents
+      return { r, exact, c: Math.floor(exact) };
+    });
+    const exactSum = raw.reduce((a, x)=> a + x.exact, 0);
+    // Scale so the shares hit the rounded total, then hand out what's left.
+    const want = Math.round(sell * 100), scale = exactSum > 0 ? want / exactSum : 0;
+    raw.forEach(x=>{ x.exact *= scale; x.c = Math.floor(x.exact + 1e-9); });
+    let left = want - raw.reduce((a, x)=> a + x.c, 0);
+    raw.slice().sort((a, b)=> (b.exact - b.c) - (a.exact - a.c)).forEach(x=>{ if (left > 0){ x.c++; left--; } });
+    lines = raw.map(x=> ({ id: x.r.id, qty: x.r.qty, total: x.c / 100, unit: x.c / 100 / x.r.qty }));
+  }
+  const quote = markupPct > 0 ? sell : null;
+  return { cut, material, cutting, subtotal, markupPct, quote, sell, lines, markup: quote != null ? cents(quote - subtotal) : 0 };
+}
+// Unit prices: cents when exact, else 4 places (a $0.0024 washer is real).
+function fmtUnitPrice(v){
+  return Math.abs(v * 100 - Math.round(v * 100)) < 1e-6 ? fmtMoney(v)
+    : '$' + v.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 }
 function fmtMoney(v){ return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function oversizedHtml(){
@@ -3245,6 +3318,64 @@ const AUDIENCE_NOTES = {
   shop: 'No prices. Material to pull, cut order, cut path and machine time, a linked sheet index, parts and one page per sheet.',
   customer: 'One page: quote total, price lines with markup built in, and the parts list. No sheets, costs or efficiency. Both export buttons give the same quote.',
 };
+/* ---- your company (one profile for every project) ---- */
+const BUSINESS_KEY = 'nestingEstimatorBusiness_v1';
+let business = { company: '', contact: '', address: '', terms: '', validDays: 30, logo: null, logoW: 0, logoH: 0 };
+// The logo is stored under its own key, so a logo that doesn't fit can never
+// take the company details (or anything else) down with it.
+const BUSINESS_LOGO_KEY = 'nestingEstimatorBusinessLogo_v1';
+const LOGO_MAX_BYTES = 150 * 1024;
+function loadBusiness(){
+  try { const raw = localStorage.getItem(BUSINESS_KEY); if (raw) business = Object.assign(business, JSON.parse(raw)); } catch(e){}
+  try { const raw = localStorage.getItem(BUSINESS_LOGO_KEY); if (raw){ const l = JSON.parse(raw); business.logo = l.logo; business.logoW = l.w; business.logoH = l.h; } } catch(e){}
+  document.getElementById('bizCompany').value = business.company || '';
+  document.getElementById('bizContact').value = business.contact || '';
+  document.getElementById('bizAddress').value = business.address || '';
+  document.getElementById('bizTerms').value = business.terms || '';
+  document.getElementById('bizValidDays').value = business.validDays != null ? business.validDays : '';
+  syncLogoUI();
+}
+function saveBusiness(){
+  business.company = document.getElementById('bizCompany').value.trim();
+  business.contact = document.getElementById('bizContact').value.trim();
+  business.address = document.getElementById('bizAddress').value.trim();
+  business.terms = document.getElementById('bizTerms').value.trim();
+  const d = parseInt(document.getElementById('bizValidDays').value, 10);
+  business.validDays = isNaN(d) ? null : Math.max(0, d);
+  const { logo, logoW, logoH, ...details } = business;
+  try { localStorage.setItem(BUSINESS_KEY, JSON.stringify(details)); } catch(e){}
+  try {
+    if (logo) localStorage.setItem(BUSINESS_LOGO_KEY, JSON.stringify({ logo, w: logoW, h: logoH }));
+    else localStorage.removeItem(BUSINESS_LOGO_KEY);
+  } catch(e){
+    business.logo = null;
+    document.getElementById('bizLogoNote').textContent = 'That logo could not be saved (browser storage is full). Try a smaller image.';
+  }
+}
+function syncLogoUI(){
+  const img = document.getElementById('bizLogoPreview');
+  img.style.display = business.logo ? 'inline-block' : 'none';
+  if (business.logo) img.src = business.logo;
+  document.getElementById('bizLogoClear').style.display = business.logo ? 'inline-block' : 'none';
+}
+// A stable, readable default: the project's creation date plus a short id.
+function autoQuoteNumber(proj){
+  const d = new Date(proj && proj.createdAt ? proj.createdAt : Date.now());
+  const ymd = String(d.getFullYear()).slice(2) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+  return 'Q-' + ymd + '-' + String((proj && proj.createdAt) || 0).slice(-3);
+}
+function quoteMeta(){
+  const proj = getProject(currentProjectId);
+  const now = new Date();
+  const valid = business.validDays > 0 ? new Date(now.getTime() + business.validDays * 864e5) : null;
+  return {
+    number: document.getElementById('quoteNumber').value.trim() || autoQuoteNumber(proj),
+    customer: document.getElementById('quoteCustomer').value.trim(),
+    date: now.toLocaleDateString(),
+    validUntil: valid ? valid.toLocaleDateString() : '',
+    partPrices: document.getElementById('quotePartPrices').checked,
+  };
+}
 const REPORT_PREFS_KEY = 'nestingEstimatorReportPrefs_v1';
 let reportPrefs = { parts:true, breakdown:true, commonLines:true, remnants:true, sheets:true,
                     paper:'tabloid', customW:11, customH:17, audience:'internal' };
@@ -3298,6 +3429,41 @@ function saveReportPrefsFromUI(){
   document.getElementById(id).addEventListener('change', saveReportPrefsFromUI);
 });
 loadReportPrefs();
+loadBusiness();
+['bizCompany','bizContact','bizAddress','bizTerms','bizValidDays'].forEach(id=> document.getElementById(id).addEventListener('input', saveBusiness));
+['quoteCustomer','quoteNumber','quotePartPrices'].forEach(id=> document.getElementById(id).addEventListener('input', saveWorkingIntoCurrentProject));
+document.getElementById('quotePartPrices').addEventListener('change', saveWorkingIntoCurrentProject);
+document.getElementById('bizLogoBtn').addEventListener('click', ()=> document.getElementById('bizLogoFile').click());
+document.getElementById('bizLogoClear').addEventListener('click', ()=>{ business.logo = null; business.logoW = business.logoH = 0; saveBusiness(); syncLogoUI(); });
+document.getElementById('bizLogoFile').addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  if (!/^image\/(png|jpeg)$/.test(file.type)){ document.getElementById('bizLogoNote').textContent = 'Use a PNG or JPG image.'; return; }
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    const img = new Image();
+    img.onload = ()=>{
+      // Scaled down to a sensible print size so it stays small in storage.
+      const k = Math.min(1, 400 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+      const g = c.getContext('2d');
+      g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      const url = file.type === 'image/jpeg' ? c.toDataURL('image/jpeg', 0.85) : c.toDataURL('image/png');
+      if (url.length > LOGO_MAX_BYTES * 4 / 3){
+        document.getElementById('bizLogoNote').textContent = 'That image is too detailed to store - try a simpler or smaller logo (under ~150 KB).';
+        return;
+      }
+      business.logo = url; business.logoW = c.width; business.logoH = c.height;
+      document.getElementById('bizLogoNote').textContent = 'PNG or JPG, shown at the top left of the quote.';
+      saveBusiness(); syncLogoUI();
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+});
 
 // Help tooltips: hover works via CSS; add tap support for touch devices,
 // and let clicking anywhere else dismiss an open tooltip.
@@ -3682,6 +3848,7 @@ function renderReportBody(partGap, borderGap, quality){
     <button id="btnEditSheets">&#9998; Edit sheets &amp; settings</button>
     <button id="btnTryHarder" title="Alternates fresh random layouts with small tweaks to your current best one — only updates if it finds a genuinely better result, never makes it worse">&#8635; Try harder</button>
     <button id="btnPrint" title="Choose who the PDF is for under Report sections (internal, shop or customer)">Export PDF: ${escHtml(PDF_AUDIENCES[reportPrefs.audience] ? PDF_AUDIENCES[reportPrefs.audience].label : PDF_AUDIENCES.internal.label)}</button>
+    <button id="btnCutList" title="Every placed part: sheet, position from the sheet's top-left corner, rotation - for a spreadsheet or other shop software">Cut list (CSV)</button>
     <button id="btnOverview" class="primary" title="One page: summary + every sheet, zoomed out">Preview &amp; export&hellip;</button>
   </div>
   <div id="tryHarderNote" style="font-size:12px; color:var(--text-dim); margin:-10px 0 18px 0; min-height:16px;"></div>`;
@@ -3691,6 +3858,7 @@ function renderReportBody(partGap, borderGap, quality){
 
   document.getElementById('reportBody').innerHTML = html;
   document.getElementById('btnPrint').addEventListener('click', (e)=> exportPdf('report', e.currentTarget));
+  document.getElementById('btnCutList').addEventListener('click', (e)=> exportCutListCsv(e.currentTarget));
   document.getElementById('btnEditParts').addEventListener('click', ()=> goToStep(1));
   document.getElementById('btnEditSheets').addEventListener('click', ()=> goToStep(2));
   document.getElementById('btnOverview').addEventListener('click', printOverview);
@@ -4389,6 +4557,15 @@ function pdfTable(doc, ctx, cols, rows, opt){
         doc.setLineWidth(0.005);
         doc.rect(x + 0.05, sy, 0.11, 0.11, 'FD');
       }
+      if (c.check){
+        // An empty tick box to mark off on the shop floor.
+        const bx = x + c._w - 0.05 - 0.13, by = ctx.y + pad * 0.5 + lineH * 0.18;
+        doc.setDrawColor(PDF_INK[0], PDF_INK[1], PDF_INK[2]);
+        doc.setLineWidth(0.008);
+        doc.rect(bx, by, 0.13, 0.13);
+        x += c._w;
+        return;
+      }
       pdfText(doc, td, emph ? 'bold' : (c.mono ? 'mono' : 'body'), emph ? PDF_RED : PDF_INK);
       const right = c.align === 'right';
       lines[ci].forEach((ln, li) => {
@@ -4557,6 +4734,9 @@ async function buildNestingPdf(mode, audienceKey, trace){
   const page = () => doc.internal.getCurrentPageInfo().pageNumber;
   const mark = (title, parent) => doc.outline.add(parent || null, title, { pageNumber: page() });
 
+  const qm = isCust ? quoteMeta() : null;
+  if (isCust) pdfQuoteHeader(doc, ctx, qm, projName);
+  else {
   // ---- title -------------------------------------------------------
   pdfText(doc, PDF_TYPE.title, 'display', PDF_INK);
   doc.text(projName, M, ctx.y + pdfLine(PDF_TYPE.title));
@@ -4569,6 +4749,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
   doc.setLineWidth(0.022);
   doc.line(M, ctx.y, M + ctx.contentW, ctx.y);
   ctx.y += 0.22;
+  }
   mark('Summary');
 
   const included = bins.filter((b, i) => sheetPrintPlan(b, i).include);
@@ -4576,6 +4757,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
   const totalParts = parts.reduce((a, p) => a + (p.qty || 0), 0);
   // What the customer is quoted for: valid parts, minus anything not placed.
   const quotedQty = p => isValidDims(p.width, p.height) ? Math.max(0, (p.qty || 0) - (unplacedCount(p.id))) : 0;
+  const totalQuoted = () => parts.reduce((a, p) => a + quotedQty(p), 0);
   const nested = countNestedInOpenings(bins);
   const usage = {};
   bins.forEach(b => { usage[b.sheetType.id] = (usage[b.sheetType.id] || 0) + 1; });
@@ -4589,7 +4771,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
   }).join(', ');
 
   // ---- headline numbers ------------------------------------------------
-  const price = costs.subtotal != null ? (costs.quote != null ? costs.quote : costs.subtotal) : null;
+  const price = costs.sell;
   const stats = [];
   if (isCust){
     stats.push({ num: price != null ? pdfMoney(price) : 'On request', lbl: 'Quote total' });
@@ -4628,8 +4810,10 @@ async function buildNestingPdf(mode, audienceKey, trace){
     }
     pdfMoneyTable(doc, ctx, rows);
   } else if (isCust){
-    pdfSectionTitle(doc, ctx, 'Price');
-    if (price != null){
+    if (price != null && qm.partPrices){
+      // Priced per part: the total goes under the parts table instead.
+    } else if (price != null){
+      pdfSectionTitle(doc, ctx, 'Price');
       // Markup is built into each line; cutting takes the remainder so the
       // lines add up to the total to the cent.
       const k = 1 + costs.markupPct / 100;
@@ -4639,6 +4823,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
       rows.push({ label: 'Total', amount: pdfMoney(price), total: true });
       pdfMoneyTable(doc, ctx, rows);
     } else {
+      pdfSectionTitle(doc, ctx, 'Price');
       pdfParagraph(doc, ctx, 'Price on request.', PDF_TYPE.td, PDF_INK);
     }
   }
@@ -4670,10 +4855,11 @@ async function buildNestingPdf(mode, audienceKey, trace){
     }
   }
   if (!isCust && bins.length) notes.push({ text: 'Drawings are proportional references, not to scale - take dimensions from the parts list, not the drawing.', rgb: PDF_MUTED });
-  if (notes.length){
-    pdfSectionTitle(doc, ctx, isCust ? 'Notes' : 'Notes for this job');
+  if (notes.length && !isCust){
+    pdfSectionTitle(doc, ctx, 'Notes for this job');
     pdfBullets(doc, ctx, notes);
   }
+  const custNotes = isCust ? notes : null;
 
   // ---- material breakdown (internal) ---------------------------------------
   if (isInt && reportPrefs.breakdown && usedTypes.length){
@@ -4712,18 +4898,33 @@ async function buildNestingPdf(mode, audienceKey, trace){
     const placedBy = {};
     bins.forEach(b => b.placements.forEach(p => { placedBy[p.defId] = (placedBy[p.defId] || 0) + 1; }));
     const anyUnplaced = s.unplaced.length > 0;
+    const lineBy = {};
+    (costs.lines || []).forEach(l => { lineBy[l.id] = l; });
+    const priced = isCust && qm.partPrices && price != null;
     const cols = isCust
-      ? [{ label: 'Part', key: 'name', w: 5.4, wrap: true }, { label: 'Size', key: 'size', w: 2.4, mono: true },
-         { label: 'Qty', key: 'qty', w: 1, align: 'right', mono: true }]
+      ? [{ label: 'Part', key: 'name', w: priced ? 4.2 : 5.4, wrap: true }, { label: 'Size', key: 'size', w: 2.2, mono: true },
+         { label: 'Qty', key: 'qty', w: 0.9, align: 'right', mono: true }]
+          .concat(priced ? [{ label: 'Unit price', key: 'unit', w: 1.5, align: 'right', mono: true },
+                            { label: 'Total', key: 'line', w: 1.5, align: 'right', mono: true }] : [])
       : [{ label: 'Tag', key: 'tag', w: 0.8, mono: true }, { label: 'Part', key: 'name', w: 4.4, wrap: true },
          { label: 'Size', key: 'size', w: 2.2, mono: true }, { label: 'Qty', key: 'qty', w: 1, align: 'right', mono: true }];
     if (!isCust && anyUnplaced) cols.push({ label: 'Not placed', key: 'unpl', w: 1.4, align: 'right', mono: true });
     pdfTable(doc, ctx, cols, parts.filter(p => (p.qty || 0) > 0).map(p => ({
       tag: '#' + (parts.indexOf(p) + 1), name: p.name, size: p.width + '" × ' + p.height + '"',
       qty: isCust ? quotedQty(p) : p.qty, unpl: unplacedBy[p.id] || 0,
+      unit: lineBy[p.id] ? fmtUnitPrice(lineBy[p.id].unit) : '', line: lineBy[p.id] ? pdfMoney(lineBy[p.id].total) : '',
       _color: isCust ? null : (p.color || '#c9ccd1'),
       _emph: (unplacedBy[p.id] || 0) > 0 ? { unpl: true } : null,
     })).filter(r => !isCust || r.qty > 0), { swatch: isCust ? null : 'name' });
+  }
+
+  if (isCust){
+    if (price != null && qm.partPrices){
+      ctx.y -= 0.10;
+      pdfMoneyTable(doc, ctx, [{ label: 'Total', detail: 'material and laser cutting, ' + totalQuoted() + ' parts', amount: pdfMoney(price), total: true }]);
+    }
+    if (custNotes.length){ pdfSectionTitle(doc, ctx, 'Notes'); pdfBullets(doc, ctx, custNotes); }
+    if (business.terms){ pdfSectionTitle(doc, ctx, 'Terms'); pdfParagraph(doc, ctx, business.terms, PDF_TYPE.note, PDF_MUTED); }
   }
 
   // ---- remnants (where to put the offcuts) -------------------------------
@@ -4790,6 +4991,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
             + pdfLine(PDF_TYPE.legendTh) + 0.12               // table header + rule
             + rowsPerCol * (pdfLine(PDF_TYPE.legendTd) + 0.07)
             + 0.20                                            // slack above the footer
+            + (isShop ? 0.36 : 0)                             // sign-off line
           : 0;
 
         const boxW = pw - 2 * M;
@@ -4824,12 +5026,28 @@ async function buildNestingPdf(mode, audienceKey, trace){
               [{ label: 'Tag', key: 'tag', w: 0.7, mono: true },
                { label: 'Part', key: 'name', w: 2.6, wrap: true },
                { label: 'Size', key: 'size', w: 1.8, mono: true },
-               { label: 'Qty', key: 'qty', w: 0.7, align: 'right', mono: true }],
+               { label: 'Qty', key: 'qty', w: 0.7, align: 'right', mono: true }]
+                .concat(isShop ? [{ label: 'Cut', key: 'chk', w: 0.5, align: 'right', check: true }] : []),
               slice.map(r => ({ tag: '#' + r.tag, name: r.name,
                                 size: r.w + '" × ' + r.h + '"', qty: r.count,
                                 _color: r.color })),
               { x: M + c * (colW + colGap), w: colW, swatch: 'name', noBreak: true,
                 th: PDF_TYPE.legendTh, td: PDF_TYPE.legendTd });
+            lctx.y = Math.max(lctx.y, sub.y);
+          }
+          if (isShop){
+            // Sign-off line for the person running the sheet.
+            const sy = Math.min(lctx.y + 0.10, ph - 0.55 - 0.12);
+            pdfText(doc, PDF_TYPE.note, 'body', PDF_MUTED);
+            const fields = ['Cut by', 'Date', 'Checked'];
+            const fw = boxW / fields.length;
+            fields.forEach((f, k) => {
+              const fx = M + k * fw;
+              doc.text(f, fx, sy);
+              doc.setDrawColor(PDF_RULE[0], PDF_RULE[1], PDF_RULE[2]);
+              doc.setLineWidth(0.008);
+              doc.line(fx + doc.getTextWidth(f) + 0.08, sy + 0.02, fx + fw - 0.3, sy + 0.02);
+            });
           }
         }
       }
@@ -4959,14 +5177,61 @@ async function buildNestingPdf(mode, audienceKey, trace){
     }
   }
 
-  pdfStampFooters(doc, projName + '   ·   ' + A.title, dateStr, M);
+  pdfStampFooters(doc, (isCust && business.company ? business.company + '   ·   ' + qm.number : projName + '   ·   ' + A.title), dateStr, M);
   return doc;
+}
+/* Quote letterhead: logo (or company name) on the left, contact block on
+   the right, then the quote's own particulars. */
+function pdfQuoteHeader(doc, ctx, qm, projName){
+  const M = ctx.M, W = ctx.contentW, top = ctx.y;
+  let leftH = 0;
+  if (business.logo && business.logoW > 0){
+    const h = 0.75, w = Math.min(2.6, h * business.logoW / business.logoH);
+    doc.addImage(business.logo, /^data:image\/jpeg/.test(business.logo) ? 'JPEG' : 'PNG', M, top, w, w * business.logoH / business.logoW, undefined, 'FAST');
+    leftH = w * business.logoH / business.logoW;
+  } else if (business.company){
+    pdfText(doc, PDF_TYPE.title - 4, 'display', PDF_INK);
+    doc.text(business.company, M, top + pdfLine(PDF_TYPE.title - 4));
+    leftH = pdfLine(PDF_TYPE.title - 4);
+  }
+  let ry = top;
+  const right = [business.logo ? business.company : '', business.contact, business.address].filter(Boolean);
+  right.forEach((t, i) => {
+    pdfText(doc, PDF_TYPE.note, i === 0 && business.logo ? 'bold' : 'body', i === 0 && business.logo ? PDF_INK : PDF_MUTED);
+    doc.text(t, M + W, ry + pdfLine(PDF_TYPE.note), { align: 'right' });
+    ry += pdfLine(PDF_TYPE.note);
+  });
+  ctx.y = Math.max(top + leftH, ry) + 0.30;
+
+  pdfText(doc, PDF_TYPE.title, 'display', PDF_INK);
+  doc.text('Quotation', M, ctx.y + pdfLine(PDF_TYPE.title));
+  pdfText(doc, PDF_TYPE.subtitle, 'mono', PDF_PURPLE);
+  doc.text(qm.number, M + W, ctx.y + pdfLine(PDF_TYPE.title), { align: 'right' });
+  ctx.y += pdfLine(PDF_TYPE.title) + 0.12;
+
+  const facts = [['Date', qm.date]];
+  if (qm.validUntil) facts.push(['Valid until', qm.validUntil]);
+  if (qm.customer) facts.push(['Prepared for', qm.customer]);
+  facts.push(['Project', projName]);
+  const colW = W / facts.length;
+  facts.forEach(([k, v], i) => {
+    pdfText(doc, PDF_TYPE.statLbl, 'body', PDF_MUTED);
+    doc.text(k.toUpperCase(), M + i * colW, ctx.y + pdfLine(PDF_TYPE.statLbl));
+    pdfText(doc, PDF_TYPE.td, 'bold', PDF_INK);
+    doc.text(doc.splitTextToSize(String(v), colW - 0.15)[0], M + i * colW, ctx.y + pdfLine(PDF_TYPE.statLbl) + pdfLine(PDF_TYPE.td));
+  });
+  ctx.y += pdfLine(PDF_TYPE.statLbl) + pdfLine(PDF_TYPE.td) + 0.14;
+  doc.setDrawColor(PDF_PURPLE[0], PDF_PURPLE[1], PDF_PURPLE[2]);
+  doc.setLineWidth(0.022);
+  doc.line(M, ctx.y, M + W, ctx.y);
+  ctx.y += 0.22;
 }
 
 /* Hand the bytes to Tauri's native save dialog. Outside Tauri (the page opened
    directly in a browser) fall back to a normal download so the export path
    still works for testing. */
-async function savePdfBytes(bytes, defaultName){
+async function savePdfBytes(bytes, defaultName, kind){
+  kind = kind || { filter: 'PDF document', ext: 'pdf', mime: 'application/pdf' };
   const T = window.__TAURI__;
   if (T && T.core && typeof T.core.invoke === 'function'){
     let bin = '';
@@ -4974,9 +5239,9 @@ async function savePdfBytes(bytes, defaultName){
     for (let i = 0; i < bytes.length; i += CH){
       bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
     }
-    return await T.core.invoke('save_pdf', { defaultName: defaultName, dataB64: btoa(bin) });
+    return await T.core.invoke('save_pdf', { defaultName: defaultName, dataB64: btoa(bin), filterName: kind.filter, extensions: [kind.ext] });
   }
-  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const blob = new Blob([bytes], { type: kind.mime });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = defaultName;
@@ -4988,6 +5253,35 @@ async function savePdfBytes(bytes, defaultName){
 }
 
 let pdfExportBusy = false;
+/* Cut list: one row per placed part, in sheet order. X/Y are the part's
+   top-left corner measured from the sheet's top-left corner, in inches, with
+   the sheet lying as listed (Sheet W across, Sheet H down) - a PDF page may
+   draw a sheet turned 90 degrees to fit the paper, the CSV never does. */
+function buildCutListCsv(){
+  const bins = (lastNestResult && lastNestResult.bins) || [];
+  const q = v => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const rows = [['Sheet', 'Material', 'Sheet W', 'Sheet H', 'Tag', 'Part', 'W', 'H', 'X from left', 'Y from top', 'Rotated', 'Inside opening of']];
+  bins.forEach((b, i) => b.placements.forEach(p => {
+    const host = b.placements.find(h => h !== p && h.openings && h.openings.length && rectContains(h, p));
+    rows.push([i + 1, b.sheetType.name, b.w, b.h, '#' + (p.tag != null ? p.tag : partTagFor(p.defId)), p.name,
+               +p.w.toFixed(4), +p.h.toFixed(4), +p.x.toFixed(4), +p.y.toFixed(4), p.rotated ? 'yes' : 'no',
+               host ? '#' + (host.tag != null ? host.tag : partTagFor(host.defId)) : '']);
+  }));
+  return '\ufeff' + rows.map(r => r.map(q).join(',')).join('\r\n') + '\r\n';
+}
+async function exportCutListCsv(btn){
+  if (!lastNestResult || !lastNestResult.bins.length){ alert('Run nesting first (step 3).'); return; }
+  const label = btn ? btn.textContent : null;
+  try {
+    const bytes = new TextEncoder().encode(buildCutListCsv());
+    const proj = getProject(currentProjectId);
+    const safe = ((proj && proj.name) || 'nesting').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'nesting';
+    const saved = await savePdfBytes(bytes, safe + ' - cut list.csv', { filter: 'CSV file', ext: 'csv', mime: 'text/csv' });
+    if (btn){ btn.textContent = saved ? 'Saved ✓' : 'Cancelled'; setTimeout(() => { btn.textContent = label; }, 2200); }
+  } catch (err){
+    alert('Cut list export failed: ' + (err && err.message ? err.message : err));
+  }
+}
 async function exportPdf(mode, btn){
   if (pdfExportBusy) return;
   if (!lastNestResult || !lastNestResult.bins.length){
