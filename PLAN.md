@@ -38,6 +38,15 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Openings can't span a part's full width/height; min opening 0 means the 0.25" floor
 - [x] Seeded random-job stress test (40 jobs: geometry, part counts, stock limits, Rot, honest comparison); 40 checks
 
+## Done — Smarter "Split multi-shape files" (2026-10-01)
+- [x] Split by containment (loop tree) when the file's outlines close: every outline is its own row with its own holes
+- [x] Parts drawn inside a frame's hole become their own rows, and the frame's hole becomes a usable opening
+- [x] Interlocking parts with overlapping bounding boxes are no longer merged
+- [x] Fix: a hole inside an outline drawn as separate LINEs was imported as a phantom part of its own (24x24 frame + 18x18 "part"); the bbox fallback now keeps a box inside another box with it
+- [x] Identical shapes in one file collapse to one row with the count as Qty (review modal says which)
+- [x] Tests: layout DXF, LINE-drawn frame, open outline fallback (50 checks)
+
 ## Next candidates
+- [ ] Cut length and pierce count per part from the DXF (loop perimeters, one pierce per closed loop) -> laser time / $ estimate in the report
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants
-- [ ] Split mode: a part drawn inside another part's hole in one DXF is merged into that part today (bbox clustering); split it into its own row instead
+- [ ] Identical shapes drawn rotated 90 deg in one file are not merged yet (only same orientation)

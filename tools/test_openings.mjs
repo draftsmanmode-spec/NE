@@ -33,6 +33,7 @@ const footer = '0\nENDSEC\n0\nEOF\n';
 const line = (x0, y0, x1, y1) => `0\nLINE\n8\nCUT\n10\n${x0}\n20\n${y0}\n11\n${x1}\n21\n${y1}\n`;
 const circle = (cx, cy, r) => `0\nCIRCLE\n8\nCUT\n10\n${cx}\n20\n${cy}\n40\n${r}\n`;
 const rectPoly = (x, y, w, h) => `0\nLWPOLYLINE\n8\nCUT\n90\n4\n70\n1\n10\n${x}\n20\n${y}\n10\n${x+w}\n20\n${y}\n10\n${x+w}\n20\n${y+h}\n10\n${x}\n20\n${y+h}\n`;
+const poly = pts => `0\nLWPOLYLINE\n8\nCUT\n90\n${pts.length}\n70\n1\n` + pts.map(([x, y]) => `10\n${x}\n20\n${y}\n`).join('');
 const rectLines = (x, y, w, h) => line(x, y, x+w, y) + line(x+w, y+h, x+w, y) /* reversed on purpose */ + line(x+w, y+h, x, y+h) + line(x, y, x, y+h);
 
 const files = {
@@ -403,6 +404,63 @@ fuzz.problems.slice(0, 10).forEach(p => console.log('  ' + p));
 check(fuzz.problems.length === 0, `random jobs: every part accounted for, stock limits and Rot respected, comparison honest (${fuzz.problems.length} problems)`);
 check(fuzzGeom, 'random jobs: no overlaps, gaps and borders kept, nested parts inside their openings');
 check(fuzz.slowestMs < 3000, `random jobs: slowest nest ${Math.round(fuzz.slowestMs)} ms`);
+
+// ---- split mode: containment, not bounding boxes ---------------------
+// A layout DXF: a frame with two tabs already drawn in its hole, three
+// identical squares, and two interlocking L brackets whose boxes overlap.
+const layout = path.join(tmp, 'Layout.dxf');
+fs.writeFileSync(layout, header
+  + rectPoly(0, 0, 30, 20) + rectLines(2, 2, 26, 16)
+  + rectPoly(4, 4, 6, 5) + rectPoly(12, 4, 6, 5)
+  + rectPoly(40, 0, 4, 4) + rectPoly(46, 0, 4, 4) + rectPoly(52, 0, 4, 4)
+  + poly([[60, 0], [70, 0], [70, 2], [62, 2], [62, 10], [60, 10]])
+  + poly([[64, 4], [72, 4], [72, 12], [70, 12], [70, 6], [64, 6]])
+  + footer);
+// An outline left open (three sides) around a round hole: the loops can't
+// be trusted as parts, so it stays one part, as before.
+const openOutline = path.join(tmp, 'Open outline.dxf');
+fs.writeFileSync(openOutline, header + line(0, 0, 20, 0) + line(20, 0, 20, 12) + line(20, 12, 0, 12) + circle(10, 6, 4) + footer);
+const importRows = async (files, split) => {
+  await page.evaluate(sp => { dxfOpenModal(); document.getElementById('dxfSplitLoops').checked = sp; document.getElementById('dxfMinOpening').value = '1'; }, split);
+  await page.setInputFiles('#dxfFileInput', files);
+  await page.waitForFunction(n => dxfReviewRows.length >= n, files.length);
+  await page.waitForTimeout(150);
+  return page.evaluate(() => dxfReviewRows.map(r => ({ name: r.name, w: r.w, h: r.h, qty: r.qty, merged: r.merged, openings: r.openings.length, skipped: r.skippedHoles })));
+};
+const splitRows = await importRows([layout], true);
+console.log(JSON.stringify(splitRows));
+const find = (w, h) => splitRows.find(r => (r.w === w && r.h === h) || (r.w === h && r.h === w));
+check(splitRows.length === 5, `split layout gives 5 rows (got ${splitRows.length})`);
+check(find(30, 20) && find(30, 20).openings === 1 && find(30, 20).skipped === 0, 'frame with parts drawn in its hole: split off from them, and its hole becomes a usable opening');
+check(find(6, 5) && find(6, 5).qty === 2 && find(6, 5).merged === 2, 'the two tabs drawn inside the hole are one row, qty 2');
+check(find(4, 4) && find(4, 4).qty === 3, 'three identical squares are one row, qty 3');
+check(find(10, 10) && find(8, 8), 'interlocking L brackets with overlapping boxes are separate parts');
+const mergedNote = await page.evaluate(() => /Identical shapes combined/.test(document.getElementById('dxfDiagnostics').textContent));
+check(mergedNote, 'review modal says which identical shapes were combined');
+await page.evaluate(() => { parts = []; });
+await page.click('#dxfAddBtn');
+const laid = await page.evaluate(() => {
+  sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
+  parts = parts.filter(p => p.width <= 30 && p.height <= 20);
+  document.getElementById('fillOpenings').checked = true;
+  document.getElementById('partGap').value = '0.25'; document.getElementById('borderGap').value = '0.5';
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const s = strategyResults[selectedStrategyKey];
+  return { sheets: s.sheets, nested: countNestedInOpenings(s.bins), unplaced: s.unplaced.length };
+});
+check(laid.sheets === 1 && laid.unplaced === 0 && laid.nested >= 5, `split layout nests back into one sheet with the small parts in the frame (${laid.nested} nested)`);
+
+const wholeRows = await importRows([layout], false);
+check(wholeRows.length === 1 && wholeRows[0].w === 72 && wholeRows[0].h === 20, 'split off: the whole file is still one part');
+const openRows = await importRows([openOutline], true);
+check(openRows.length === 1 && openRows[0].w === 20 && openRows[0].h === 12 && openRows[0].openings === 0, 'an outline that never closes is not split apart by its hole');
+// Outline drawn as 4 separate LINEs around a round hole: one part with an
+// opening (the bounding-box split used to make the hole a part of its own).
+const lineFrame = path.join(tmp, 'Line frame.dxf');
+fs.writeFileSync(lineFrame, header + rectLines(0, 0, 24, 24) + circle(12, 12, 9) + footer);
+const lineRows = await importRows([lineFrame], true);
+check(lineRows.length === 1 && lineRows[0].w === 24 && lineRows[0].openings >= 1, `LINE-drawn outline with a round hole stays one part with its opening (${lineRows.length} row, ${lineRows[0] && lineRows[0].openings} openings)`);
+await page.evaluate(() => document.getElementById('dxfModal').classList.remove('open'));
 
 // The PDF path draws the same sheets through drawSheet(); make sure it still builds.
 const pdfBytes = await page.evaluate(async () => {

@@ -524,7 +524,7 @@
         </div>
         <div class="checkline" style="align-items:center;">
           <input type="checkbox" id="dxfSplitLoops">
-          <label class="small">Split multi-shape files into separate parts<span class="hint" tabindex="0">?<span class="hint-bubble">On: a file containing several disconnected outlines becomes one part row per outline (for layout/assembly files with more than one shape drawn together). Off: the whole file becomes a single part sized to its overall bounding box.</span></span></label>
+          <label class="small">Split multi-shape files into separate parts<span class="hint" tabindex="0">?<span class="hint-bubble">On: a file containing several outlines becomes one part row per outline (for layout/assembly files with more than one shape drawn together) &mdash; including parts drawn inside another part's cut-out, and identical shapes are combined into one row with a count. Off: the whole file becomes a single part sized to its overall bounding box.</span></span></label>
         </div>
         <div class="checkline" style="align-items:center; grid-column:auto;">
           <input type="checkbox" id="dxfDetectOpenings" checked>
@@ -1760,10 +1760,10 @@ function dxfBboxOf(pts){
 }
 /* Group points that are spatially separate (gap larger than `gap` between
    their bounding boxes) into distinct clusters — this is the "split
-   multi-shape files" option. Deliberately simple: a bounding-box gap test,
-   not full contour stitching, because for splitting an assembly drawing
-   into its parts this is enough and it can't misfire the way loop-closing
-   heuristics occasionally can. */
+   multi-shape files" option's fallback, used when the file's outlines don't
+   all close (dxfSplitNested handles the closed case by containment).
+   Deliberately simple: a bounding-box gap test plus "a box inside another
+   box belongs to it", so it can't misfire on broken contours. */
 function dxfClusterRuns(runs, gap){
   const boxes = runs.map(r => dxfBboxOf(r.pts));
   const n = runs.length;
@@ -1772,6 +1772,23 @@ function dxfClusterRuns(runs, gap){
   const union = (a,b) => { a=find(a); b=find(b); if (a!==b) parent[a]=b; };
   const overlaps = (a,b) => !(b.x0 > a.x1+gap || b.x1 < a.x0-gap || b.y0 > a.y1+gap || b.y1 < a.y0-gap);
   for (let i=0;i<n;i++) for (let j=i+1;j<n;j++) if (overlaps(boxes[i], boxes[j])) union(i,j);
+  // A group lying entirely inside another group's box belongs to it: a hole
+  // in a part whose outline is separate LINEs touches none of them, but it
+  // is still that part's hole, not a part of its own.
+  for (let changed = true; changed; ){
+    changed = false;
+    const gb = new Map();
+    for (let i=0;i<n;i++){
+      const r = find(i), b = boxes[i], g = gb.get(r);
+      gb.set(r, g ? { x0:Math.min(g.x0,b.x0), y0:Math.min(g.y0,b.y0), x1:Math.max(g.x1,b.x1), y1:Math.max(g.y1,b.y1) } : { x0:b.x0, y0:b.y0, x1:b.x1, y1:b.y1 });
+    }
+    const roots = [...gb.keys()];
+    for (const a of roots) for (const b of roots){
+      if (a === b || find(a) === find(b)) continue;
+      const A = gb.get(a), B = gb.get(b);
+      if (B.x0 >= A.x0-gap && B.x1 <= A.x1+gap && B.y0 >= A.y0-gap && B.y1 <= A.y1+gap){ union(b, a); changed = true; }
+    }
+  }
   const groups = {};
   for (let i=0;i<n;i++){ const r=find(i); (groups[r] = groups[r]||[]).push(i); }
   return Object.values(groups).map(idxs => {
@@ -1804,7 +1821,8 @@ const DXF_LOOP_TOL = 0.02;       // inches: endpoints closer than this count as 
 const DXF_MAX_OPENINGS = 16;     // per part, keeps the packer's free list small
 const DXF_RECTS_PER_HOLE = 3;
 
-function dxfStitchLoops(runs, tol){
+function dxfStitchLoops(runs, tol){ return dxfStitch(runs, tol).loops; }
+function dxfStitch(runs, tol){
   const near = (a, b) => Math.abs(a[0]-b[0]) <= tol && Math.abs(a[1]-b[1]) <= tol;
   const loops = [], open = [];
   runs.forEach(r => {
@@ -1823,6 +1841,7 @@ function dxfStitchLoops(runs, tol){
     grid.get(k).push({ i, end });
   }));
   const used = new Array(open.length).fill(false);
+  const chains = [];
   const mate = p => {
     const [cx, cy] = cellOf(p);
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++){
@@ -1849,8 +1868,9 @@ function dxfStitchLoops(runs, tol){
       chain = seg.slice(0, -1).concat(chain);
     }
     if (chain.length >= 4 && near(chain[0], chain[chain.length-1])) loops.push(chain.slice(0, -1));
+    else chains.push(chain);
   }
-  return loops.filter(l => l.length >= 3);
+  return { loops: loops.filter(l => l.length >= 3), open: chains };
 }
 function polyArea(poly){
   let a = 0;
@@ -1979,23 +1999,58 @@ function dxfInscribedRects(poly, minDim, maxCount){
 /* Usable openings of one part. `runs` are that part's cut runs (inches),
    `bbox` its bounding box. Openings are snapped inward to `snap` so a
    rounded number never claims space the hole doesn't have. */
-function dxfFindOpenings(runs, bbox, minDim, snap){
-  const loops = dxfStitchLoops(runs, DXF_LOOP_TOL)
-    .map(poly => ({ poly, area: polyArea(poly), bb: dxfBboxOf(poly), parent: -1, kids: 0 }))
+/* Closed loops, largest first, each with its parent (the smallest bigger
+   loop containing it), child count and depth: even depth = material
+   outline, odd depth = hole. */
+function dxfLoopTree(polys){
+  const loops = polys
+    .map(poly => ({ poly, area: polyArea(poly), bb: dxfBboxOf(poly), parent: -1, kids: 0, depth: 0 }))
     .filter(l => l.area > 1e-9)
     .sort((a, b) => b.area - a.area);
-  const result = { openings: [], skippedHoles: 0 };
-  if (loops.length < 2) return result;
-  // Parent = the smallest bigger loop that contains this one.
   loops.forEach((l, i) => {
     const [px, py] = l.poly[0];
     for (let j = i-1; j >= 0; j--){
       const o = loops[j];
       if (l.bb.x0 >= o.bb.x0-1e-9 && l.bb.x1 <= o.bb.x1+1e-9 && l.bb.y0 >= o.bb.y0-1e-9 && l.bb.y1 <= o.bb.y1+1e-9 && pointInPoly(px, py, o.poly)){
-        l.parent = j; o.kids++; break;
+        l.parent = j; l.depth = o.depth + 1; o.kids++; break;
       }
     }
   });
+  return loops;
+}
+/* Split one cluster of runs by containment instead of by bounding box:
+   every material outline becomes its own part, carrying its own holes and
+   any open geometry inside it. This is what separates a frame from parts
+   drawn inside its hole (a DXF exported with the drop-out already used),
+   and two interlocking parts whose boxes overlap. Returns null - keep the
+   cluster as it is - when there's nothing to split, or when some open
+   geometry sits outside every closed outline (the outline itself may not
+   be closed, so the loops can't be trusted as parts). */
+function dxfSplitNested(runs){
+  const { loops: polys, open } = dxfStitch(runs, DXF_LOOP_TOL);
+  const loops = dxfLoopTree(polys);
+  const outlines = loops.filter(l => l.depth % 2 === 0);
+  if (outlines.length < 2) return null;
+  const parts = outlines.map(o => ({ o, extra: [] }));
+  for (const chain of open){
+    const [px, py] = chain[0];
+    let home = null;
+    parts.forEach(pt => { if ((!home || pt.o.area < home.o.area) && pointInPoly(px, py, pt.o.poly)) home = pt; });
+    if (!home) return null;
+    home.extra.push(chain);
+  }
+  const closed = poly => ({ pts: poly.concat([poly[0]]) });
+  return parts.map(pt => {
+    const holes = loops.filter(l => l.parent >= 0 && loops[l.parent] === pt.o);
+    const partRuns = [closed(pt.o.poly)].concat(holes.map(h => closed(h.poly)), pt.extra.map(c => ({ pts: c })));
+    const pts = partRuns.flatMap(r => r.pts);
+    return { pts, bbox: dxfBboxOf(pts), runs: partRuns };
+  });
+}
+function dxfFindOpenings(runs, bbox, minDim, snap){
+  const loops = dxfLoopTree(dxfStitchLoops(runs, DXF_LOOP_TOL));
+  const result = { openings: [], skippedHoles: 0 };
+  if (loops.length < 2) return result;
   const holes = loops.filter(l => l.parent >= 0 && loops[l.parent].parent < 0);
   const rects = [];
   holes.forEach(h => {   // largest first, so a perforated sheet stops early
@@ -2135,28 +2190,42 @@ function dxfReadFile(file){
       }
 
       const split = document.getElementById('dxfSplitLoops').checked;
-      const clusters = split ? dxfClusterRuns(active, 0.05) : [{ pts: active.flatMap(r=>r.pts), bbox: null, runs: active }];
+      // Split: by containment when the file's outlines all close (the usual
+      // laser-ready DXF), else by bounding-box gaps, then by containment
+      // inside each of those groups.
+      const clusters = !split ? [{ pts: active.flatMap(r=>r.pts), bbox: null, runs: active }]
+        : (dxfSplitNested(active) || dxfClusterRuns(active, 0.05).flatMap(cl => dxfSplitNested(cl.runs) || [cl]));
       const round = document.getElementById('dxfRoundSixteenth').checked;
       const detect = document.getElementById('dxfDetectOpenings').checked;
       const minRaw = parseFloat(document.getElementById('dxfMinOpening').value);
       const minOpening = Math.max(0.25, isNaN(minRaw) ? 1 : minRaw);
       const baseName = file.name.replace(/\.dxf$/i, '');
 
-      clusters.forEach((cl, i) => {
+      // Identical shapes from one file (a layout of 20 of the same bracket)
+      // become one row with their count as Qty, not 20 rows.
+      const shapes = [], byKey = new Map();
+      clusters.forEach(cl => {
         const bbox = cl.bbox || dxfBboxOf(cl.pts);
         if (!(bbox.w > 0 && bbox.h > 0)) return;
         let w = bbox.w, h = bbox.h;
         if (round){ w = dxfRoundToSixteenth(w); h = dxfRoundToSixteenth(h); }
-        const label = clusters.length > 1 ? baseName + ' #' + (i+1) : baseName;
-        const guess = dxfGuessQtyFromName(label);
         const found = detect ? dxfFindOpenings(cl.runs, bbox, minOpening, round ? 1/16 : 1/64) : { openings: [], skippedHoles: 0 };
         w = +w.toFixed(4); h = +h.toFixed(4);
+        const key = w.toFixed(3) + 'x' + h.toFixed(3) + '|' + found.openings.map(o => [o.x, o.y, o.w, o.h].map(v => v.toFixed(2)).join(',')).join(';');
+        const same = byKey.get(key);
+        if (same){ same.count++; same.skippedHoles += found.skippedHoles; return; }
+        const shape = { w, h, found, count: 1, skippedHoles: found.skippedHoles };
+        byKey.set(key, shape); shapes.push(shape);
+      });
+      shapes.forEach((sh, i) => {
+        const label = shapes.length > 1 ? baseName + ' #' + (i+1) : baseName;
+        const guess = dxfGuessQtyFromName(label);
         dxfReviewRows.push({
           id: 'dxfrow' + (dxfRowSeq++),
-          name: guess.name, w, h,
-          qty: guess.qty, source: file.name,
-          openings: found.openings, useOpenings: found.openings.length > 0,
-          openBase: { w, h }, skippedHoles: found.skippedHoles
+          name: guess.name, w: sh.w, h: sh.h,
+          qty: guess.qty * sh.count, source: file.name, merged: sh.count,
+          openings: sh.found.openings, useOpenings: sh.found.openings.length > 0,
+          openBase: { w: sh.w, h: sh.h }, skippedHoles: sh.skippedHoles
         });
       });
       renderDxfReviewTable();
@@ -2178,6 +2247,10 @@ function renderDxfDiagnostics(){
   if (withOpenings.length){
     const n = withOpenings.reduce((s, r) => s + r.openings.length, 0);
     html += `<div class="dxf-diag ok"><b>${n} usable opening${n===1?'':'s'}</b> found in ${withOpenings.length} part${withOpenings.length===1?'':'s'} &mdash; smaller parts will be nested inside them instead of that material dropping out as scrap. Untick <b>Fill</b> on a row to keep its openings empty.${skipped ? ` ${skipped} opening${skipped===1?' already has':'s already have'} another shape drawn inside and ${skipped===1?'was':'were'} left alone.` : ''}</div>`;
+  }
+  const merged = dxfReviewRows.filter(r => r.merged > 1);
+  if (merged.length){
+    html += `<div class="dxf-diag ok"><b>Identical shapes combined:</b> ${merged.map(r => `${escHtml(r.name)} &times; ${r.merged}`).join(', ')} &mdash; each is one row with the count in Qty.</div>`;
   }
   if (!dxfFailedFiles.length){ host.innerHTML = html; return; }
   host.innerHTML = html + `<div class="dxf-diag warn"><b>${dxfFailedFiles.length} file${dxfFailedFiles.length===1?'':'s'} produced no shape:</b> ${dxfFailedFiles.map(escHtml).join(', ')}. Nothing was added for these — check the file isn't empty or entirely on a construction/dimension layer.</div>`;
