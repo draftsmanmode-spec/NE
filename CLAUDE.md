@@ -22,6 +22,8 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
   rectangles fully inside a DXF hole; never claim space the hole doesn't have.
 - Placement coordinates are y-down from the sheet's top-left; DXF is y-up — convert at import.
 - Material used = `placedArea(p)` (box minus openings handed back). Never sum `p.w*p.h` directly.
+  Cost is always whole sheets; area only breaks ties, so openings-filled and openings-empty layouts must score the same material.
+- Openings reach the packer only through `unitForPart()`, gated by the project switch `nestOpeningsEnabled`.
 - One 90° rotation convention everywhere: local (u,v) → (H − v, u). Packer and `rotatedBinView` must agree.
 - No bundler, no npm deps in the app. Keep it one file that works from `file://` and offline.
 - Saved projects live in `localStorage`; new part fields must survive `sanitizeImportedPart`.

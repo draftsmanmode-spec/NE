@@ -713,6 +713,10 @@
               <input type="checkbox" id="defaultRotate" checked>
               <label class="small">Allow 90&deg; rotation for new parts by default</label>
             </div>
+            <div class="checkline">
+              <input type="checkbox" id="fillOpenings" checked>
+              <label class="small">Nest parts inside openings<span class="hint" tabindex="0">?<span class="hint-bubble">Uses the cut-outs of frames and other parts that have openings (from a DXF, the &#9998; editor, or a rail value in pasted rows). On: the report also says how many sheets that saved compared with leaving the openings empty. Off: every part is nested as a solid rectangle. Per-part Fill boxes still apply when this is on.</span></span></label>
+            </div>
             <div>
               <label class="small">Markup for customer quote (%)<span class="hint" tabindex="0">?<span class="hint-bubble">Optional. If you fill in $/sheet costs, this turns your raw material cost into a sell price — e.g. 35% markup on $100 of material quotes at $135. Leave blank to just see your own cost.</span></span></label>
               <input type="number" id="markupPct" step="1" min="0" placeholder="e.g. 35">
@@ -899,7 +903,7 @@ function sampleData(){
   };
 }
 function defaultSettings(){
-  return { partGap:0.25, borderGap:0.5, defaultRotate:true, quality:2, markupPct:'' };
+  return { partGap:0.25, borderGap:0.5, defaultRotate:true, fillOpenings:true, quality:2, markupPct:'' };
 }
 
 function getProject(id){ return projects.find(p=>p.id===id); }
@@ -930,6 +934,7 @@ function saveWorkingIntoCurrentProject(){
     partGap: document.getElementById('partGap').value,
     borderGap: document.getElementById('borderGap').value,
     defaultRotate: document.getElementById('defaultRotate').checked,
+    fillOpenings: document.getElementById('fillOpenings').checked,
     quality: qualitySlider.value,
     markupPct: document.getElementById('markupPct').value
   };
@@ -946,6 +951,7 @@ function loadProjectIntoWorking(id){
   document.getElementById('partGap').value = s.partGap;
   document.getElementById('borderGap').value = s.borderGap;
   document.getElementById('defaultRotate').checked = !!s.defaultRotate;
+  document.getElementById('fillOpenings').checked = s.fillOpenings !== false;
   document.getElementById('markupPct').value = s.markupPct;
   qualitySlider.value = s.quality;
   updateQualityNote();
@@ -1270,6 +1276,7 @@ updateQualityNote();
 document.getElementById('partGap').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('borderGap').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('defaultRotate').addEventListener('input', saveWorkingIntoCurrentProject);
+document.getElementById('fillOpenings').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('markupPct').addEventListener('input', ()=>{
   saveWorkingIntoCurrentProject();
   if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
@@ -2496,6 +2503,8 @@ function packSheetsOnce(sheetTypesIn, unitsSorted, partGap, borderGap, rule){
       // Same 90deg turn as rotatedBinView(): local (u,v) -> (H - v, u).
       pl.openings = unit.openings.map(o => rotated ? { x: unit.h - o.y - o.h, y: o.x, w: o.h, h: o.w } : { x:o.x, y:o.y, w:o.w, h:o.h });
       pl.openArea = pl.openings.reduce((s, o) => s + o.w*o.h, 0);
+    } else if (unit.holeArea){
+      pl.openArea = unit.holeArea;
     }
     best.bin.placements.push(pl);
     splitFreeRects(best.bin.freeRects, best.x, best.y, best.w, best.h);
@@ -2508,8 +2517,11 @@ function partTagFor(defId){
   const idx = parts.findIndex(p=>p.id===defId);
   return idx>=0 ? (idx+1) : '?';
 }
+// Project-wide "Nest parts inside openings" switch, set by runNesting()
+// (and by tryHarder() from the settings that run used) before packing.
+let nestOpeningsEnabled = true;
 function unitForPart(p, idx){
-  return { defId:p.id, name:p.name, tag:idx+1, w:p.width, h:p.height, allowRotate:!!p.rotate, color:p.color, openings:partOpenings(p) };
+  return { defId:p.id, name:p.name, tag:idx+1, w:p.width, h:p.height, allowRotate:!!p.rotate, color:p.color, openings: nestOpeningsEnabled ? partOpenings(p) : [] };
 }
 function expandUnits(partsIn){
   const units = [];
@@ -2596,6 +2608,17 @@ function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, opti
     for (const rule of PLACEMENT_RULES){
       attempts.push({ order: shuffle(units), rule });
     }
+  }
+
+  // The packer is greedy, so filling an opening early can, rarely, crowd a
+  // later part out. Every attempt is therefore also run with openings left
+  // empty, and the best of both wins: using openings can never cost a sheet.
+  if (units.some(u=> u.openings && u.openings.length)){
+    // holeArea keeps the material count identical to the filled variant, so
+    // the two only differ where it matters: sheets, cost, unplaced.
+    const plain = new Map(units.map(u=> [u, (u.openings && u.openings.length)
+      ? Object.assign({}, u, { openings: [], holeArea: u.openings.reduce((a, o)=> a + o.w*o.h, 0) }) : u]));
+    attempts.slice().forEach(a=> attempts.push({ order: a.order.map(u=> plain.get(u)), rule: a.rule }));
   }
 
   // "Optimize sheet mix": also try several sheet-type priority orders (not
@@ -3042,9 +3065,14 @@ function computeAllStrategies(partGap, borderGap, quality, sheetTypesForNesting)
 function buildStrategyCompareTable(sortedKeys){
   let html = '<div class="card" style="margin-bottom:22px;"><h2>Compare nesting strategies <span class="count">pick which one the report below uses</span></h2>';
   html += '<p style="font-size:11.5px; color:var(--text-dim); margin:0 0 12px 0;">Efficiency is per-sheet fill % (two very different strategies can share the same %). <b style="color:var(--text);">Wasted material</b> and <b style="color:var(--text);">cost</b> are the totals that actually tell you which is cheaper overall.</p>';
-  html += '<table class="breakdown"><thead><tr><th>Strategy</th><th>Sheets</th><th>Efficiency</th><th>Wasted material</th><th>Cost</th><th>Unplaced</th><th></th></tr></thead><tbody>';
+  const showBase = sortedKeys.some(k=> strategyResults[k].noOpenings);
+  html += '<table class="breakdown"><thead><tr><th>Strategy</th><th>Sheets</th><th>Efficiency</th><th>Wasted material</th><th>Cost</th><th>Unplaced</th>'
+    + (showBase ? '<th title="The same strategy with every opening left empty">Without openings</th>' : '') + '<th></th></tr></thead><tbody>';
   sortedKeys.forEach((key,i)=>{
     const s = strategyResults[key];
+    const b = s.noOpenings;
+    const baseCell = !showBase ? '' : !b ? '<td>&mdash;</td>'
+      : `<td>${b.sheets} sht${b.costKnown ? ' &middot; $'+b.cost.toFixed(2) : ''}${b.sheets>s.sheets ? ' <span style="color:var(--green); font-size:10.5px;" title="Sheets saved by nesting into openings">saves '+(b.sheets-s.sheets)+'</span>' : ''}</td>`;
     const isSelected = key===selectedStrategyKey;
     const wasteSqFt = (s.wastedArea/144).toFixed(1);
     html += `<tr>
@@ -3054,6 +3082,7 @@ function buildStrategyCompareTable(sortedKeys){
       <td>${wasteSqFt} ft&sup2;</td>
       <td>${s.costKnown ? '$'+s.cost.toFixed(2) : '&mdash;'}</td>
       <td>${s.unplacedCount ? '<b style="color:var(--red)">'+s.unplacedCount+'</b>' : '0'}</td>
+      ${baseCell}
       <td><button class="small ${isSelected?'primary':''}" data-select-strategy="${key}">${isSelected ? 'Selected' : 'Use this'}</button></td>
     </tr>`;
   });
@@ -3085,14 +3114,26 @@ function runNesting(){
     return;
   }
 
+  // With openings on, first nest the same job with them switched off, so the
+  // report can say exactly what they saved (sheets are what cost money).
+  const fillOpenings = document.getElementById('fillOpenings').checked;
+  let baseline = null;
+  if (fillOpenings && parts.some(p=> p.qty>0 && partOpenings(p).length)){
+    nestOpeningsEnabled = false;
+    computeAllStrategies(partGap, borderGap, quality, validSheetTypesForNesting);
+    baseline = {};
+    Object.entries(strategyResults).forEach(([k, r])=>{ baseline[k] = { sheets:r.sheets, cost:r.cost, costKnown:r.costKnown, unplacedCount:r.unplacedCount }; });
+  }
+  nestOpeningsEnabled = fillOpenings;
   const sortedKeys = computeAllStrategies(partGap, borderGap, quality, validSheetTypesForNesting);
+  if (baseline) sortedKeys.forEach(k=>{ if (baseline[k]) strategyResults[k].noOpenings = baseline[k]; });
   if (sortedKeys.length===0){
     lastNestResult = null;
     results.innerHTML = invalidNote + '<div class="warning-box"><b>None of your sheet sizes can hold every part.</b> Add a bigger sheet type, or check whether a part\'s dimensions are larger than any sheet you\'ve defined.</div>';
     return;
   }
   selectedStrategyKey = sortedKeys[0];
-  lastRunParams = { partGap, borderGap, quality };
+  lastRunParams = { partGap, borderGap, quality, fillOpenings };
   lastInvalidNote = invalidNote;
 
   let html = invalidNote;
@@ -3142,6 +3183,7 @@ function tryHarder(partGap, borderGap, quality){
     if (currentProjectId !== startProjectId || !strategyResults[startStrategyKey]){ return; }
 
     const EXTRA = 60;
+    nestOpeningsEnabled = !lastRunParams || lastRunParams.fillOpenings !== false;
     const currentBest = { bins: s.bins, unplaced: s.unplaced };
     const { result, improved } = packMoreAttempts(strategySheets, parts, partGap, borderGap, currentBest, EXTRA);
 
@@ -3246,8 +3288,9 @@ function renderReportBody(partGap, borderGap, quality){
   }
 
   html += `<div class="gap-note">Strategy: <span>${escHtml(strategyResults[selectedStrategyKey].label)}</span> &nbsp;&middot;&nbsp; Part gap: <span>${partGap}"</span> &nbsp;&middot;&nbsp; Border gap: <span>${borderGap}"</span> &nbsp;&middot;&nbsp; Quality pass: <span>${['Fast','Balanced','Quality'][quality]}</span></div>`;
-  if (nestedInOpenings>0){
-    html += `<div class="gap-note" style="margin-top:-16px;">&#9635; <span>${nestedInOpenings}</span> part${nestedInOpenings===1?'':'s'} nested inside the openings of other parts &mdash; material that would otherwise drop out as scrap.</div>`;
+  const savingText = openingsSavingText(s, nestedInOpenings);
+  if (savingText){
+    html += `<div class="gap-note" id="openingsNote" style="margin-top:-16px;">&#9635; <span>${escHtml(savingText)}</span></div>`;
   }
   if (reportPrefs.commonLines && commonLines.count>0){
     html += `<div class="gap-note" style="margin-top:-16px;">&#9878; <span>${commonLines.count}</span> common-line opportunit${commonLines.count===1?'y':'ies'} detected (~<span>${commonLines.totalLength.toFixed(1)}"</span> total edge length) — adjacent parts that are exactly aligned. Cutting these shared edges as one line instead of two saves kerf width and a pierce each.</div>`;
@@ -3508,6 +3551,34 @@ function placementLabelBox(p){
   bands.sort((a,b)=> (b.w*b.h*(b.horiz?1.5:1)) - (a.w*a.h*(a.horiz?1.5:1)));
   return bands[0];
 }
+/* What nesting into openings saved, against the same strategy nested with
+   openings left empty. null when there's nothing to compare. */
+function openingsSaving(s){
+  const b = s && s.noOpenings;
+  if (!b) return null;
+  return {
+    withSheets: s.sheets, withoutSheets: b.sheets,
+    sheetsSaved: b.sheets - s.sheets,
+    costSaved: (s.costKnown && b.costKnown) ? b.cost - s.cost : null,
+    // fewer unplaced counts as a saving too (stock limits)
+    unplacedSaved: b.unplacedCount - s.unplacedCount,
+  };
+}
+function openingsSavingText(s, nested){
+  const sv = openingsSaving(s);
+  const lead = nested + ' part' + (nested===1?'':'s') + ' nested inside the openings of other parts';
+  if (!sv) return nested > 0 ? lead + ' - material that would otherwise drop out as scrap.' : '';
+  if (sv.sheetsSaved > 0){
+    return lead + ': saves ' + sv.sheetsSaved + ' sheet' + (sv.sheetsSaved===1?'':'s')
+      + (sv.costSaved != null && sv.costSaved > 0 ? ' ($' + sv.costSaved.toFixed(2) + ')' : '')
+      + ' - ' + sv.withSheets + ' instead of ' + sv.withoutSheets + ' with openings left empty.';
+  }
+  if (sv.unplacedSaved > 0) return lead + ': fits ' + sv.unplacedSaved + ' more part' + (sv.unplacedSaved===1?'':'s') + ' on the stock you have.';
+  const same = sv.withSheets + ' sheet' + (sv.withSheets===1?'':'s');
+  return nested > 0 ? lead + ', but it takes the same ' + same + ' either way on this job.'
+    : 'Openings checked: same ' + same + ' with or without them on this job.';
+}
+
 /* How many placements sit inside another placement's footprint, i.e. were
    nested into an opening. */
 function countNestedInOpenings(bins){
@@ -4094,12 +4165,8 @@ async function buildNestingPdf(mode){
     + included.length + ' of ' + bins.length + ' sheets   ·   proportional reference drawing, not to scale',
     PDF_TYPE.note, PDF_MUTED, 'mono');
 
-  const nestedInOpenings = countNestedInOpenings(bins);
-  if (nestedInOpenings > 0){
-    pdfParagraph(doc, ctx, nestedInOpenings + ' part' + (nestedInOpenings === 1 ? '' : 's')
-      + ' nested inside the openings of other parts (dashed outlines) - material that would otherwise drop out as scrap.',
-      PDF_TYPE.note, PDF_MUTED);
-  }
+  const savingText = openingsSavingText(s, countNestedInOpenings(bins));
+  if (savingText) pdfParagraph(doc, ctx, savingText + ' Openings are drawn dashed.', PDF_TYPE.note, PDF_MUTED);
 
   if (s.unplaced.length){
     const grouped = {};

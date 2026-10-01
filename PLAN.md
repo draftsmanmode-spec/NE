@@ -22,7 +22,13 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Paste rows: optional 5th value = frame rail width (`Frame, 30, 20, 2, 1.5`)
 - [x] Tests extended to 25 checks (paste, editor via UI, validation, re-fit, JSON round-trip)
 
+## Done — Global openings switch (2026-10-01)
+- [x] "Nest parts inside openings" in Nesting settings (default on, saved per project)
+- [x] When on, the same job is also nested with openings empty; report + PDF state the saving in sheets and $ ("saves 1 sheet ($40) - 2 instead of 3")
+- [x] Strategy table gets a "Without openings" column when there is something to compare
+- [x] Never worse: every packing attempt also runs with openings empty, best of both wins (scored on the same material count)
+- [x] Tests: saving text, switch off, persistence, table column, never-worse (30 checks)
+
 ## Next candidates
-- [ ] Global on/off for openings in Nesting settings, so the strategy table can show with vs without side by side
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants
 - [ ] Split mode: a part drawn inside another part's hole in one DXF is merged into that part today (bbox clustering); split it into its own row instead

@@ -153,6 +153,42 @@ check(tight.without.nested === 0, 'unticking Fill keeps openings empty');
 check(tight.withOpenings.sheets === 2 && tight.without.sheets === 3,
   `openings save a sheet: ${tight.withOpenings.sheets} sheets ($${tight.withOpenings.cost}) vs ${tight.without.sheets} ($${tight.without.cost})`);
 
+// Global switch: the report states the saving; off nests solid rectangles;
+// the setting is saved with the project; the strategy table shows both.
+const sw = await page.evaluate(() => {
+  parts.forEach(p => { if (p.openings) p.useOpenings = true; });
+  document.getElementById('fillOpenings').checked = true;
+  saveWorkingIntoCurrentProject(); render();
+  runNesting();
+  const on = strategyResults[selectedStrategyKey];
+  const note = (document.getElementById('openingsNote') || {}).textContent || '';
+  const neverWorse = Object.values(strategyResults).every(r => !r.noOpenings || r.sheets <= r.noOpenings.sheets);
+
+  document.getElementById('fillOpenings').checked = false;
+  saveWorkingIntoCurrentProject();
+  runNesting();
+  const off = strategyResults[selectedStrategyKey];
+  const offState = { sheets: off.sheets, nested: countNestedInOpenings(off.bins), base: !!off.noOpenings, note: !!document.getElementById('openingsNote') };
+  loadProjectIntoWorking(currentProjectId);
+  const persisted = document.getElementById('fillOpenings').checked === false;
+
+  document.getElementById('fillOpenings').checked = true;
+  sheetTypes.push({ id: nextId(), name: '48x24', width: 48, height: 24, qty: null, cost: 70 });
+  saveWorkingIntoCurrentProject(); render();
+  runNesting();
+  const table = document.querySelector('#results table.breakdown');
+  const hasColumn = !!table && /Without openings/.test(table.querySelector('thead').textContent);
+  sheetTypes = sheetTypes.filter(st => st.name === '32x22');
+  saveWorkingIntoCurrentProject(); render();
+  return { note, neverWorse, offState, persisted, hasColumn, onSheets: on.sheets };
+});
+console.log(JSON.stringify(sw));
+check(/saves 1 sheet \(\$40\.00\) - 2 instead of 3/.test(sw.note), `report states the saving: "${sw.note.trim()}"`);
+check(sw.neverWorse, 'with openings never needs more sheets than without, for every strategy');
+check(sw.offState.sheets === 3 && sw.offState.nested === 0 && !sw.offState.base && !sw.offState.note, 'switch off: solid rectangles, 3 sheets, no saving note');
+check(sw.persisted, 'switch is saved with the project');
+check(sw.hasColumn, 'strategy table shows a "Without openings" column');
+
 // Portrait sheet: the 30 x 20 frame has to turn 90deg, and so do its openings.
 const turned = await page.evaluate(() => {
   parts.forEach(p => { if (p.openings) p.useOpenings = true; });
