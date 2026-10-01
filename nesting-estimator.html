@@ -203,6 +203,18 @@
   .col-w, .col-h, .col-q{ width:64px; }
   .col-swatch{ width:30px; }
   .col-del{ width:28px; }
+  .col-fill{ width:44px; text-align:center; white-space:nowrap; }
+  .fill-tog{ display:inline-flex; align-items:center; gap:3px; font-family:var(--mono); font-size:11px; color:var(--text-dim); cursor:pointer; }
+  .fill-none{ color:var(--text-faint); }
+  .fill-stale{ color:var(--amber, #e0a64a); cursor:help; }
+  .fill-cell-inner{ display:inline-flex; align-items:center; gap:4px; }
+  button.fill-edit{ padding:1px 5px; font-size:11px; line-height:1.3; }
+  .op-preview{ background:#fff; border-radius:6px; padding:10px; display:flex; justify-content:center; }
+  .op-preview svg{ max-width:100%; max-height:240px; }
+  .op-error{ color:var(--red); font-size:12px; min-height:16px; margin-top:8px; }
+  .op-note{ font-size:12px; color:var(--text-dim); margin:0 0 10px 0; line-height:1.5; }
+  .op-frame-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .op-frame-row input{ width:80px; }
   .row-actions{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
 
   .settings-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -514,6 +526,14 @@
           <input type="checkbox" id="dxfSplitLoops">
           <label class="small">Split multi-shape files into separate parts<span class="hint" tabindex="0">?<span class="hint-bubble">On: a file containing several disconnected outlines becomes one part row per outline (for layout/assembly files with more than one shape drawn together). Off: the whole file becomes a single part sized to its overall bounding box.</span></span></label>
         </div>
+        <div class="checkline" style="align-items:center; grid-column:auto;">
+          <input type="checkbox" id="dxfDetectOpenings" checked>
+          <label class="small">Fill interior openings with smaller parts<span class="hint" tabindex="0">?<span class="hint-bubble">A frame, ring or bracket with a large cut-out drops that piece as scrap. On: those cut-outs are found in the DXF and smaller parts get nested inside them, keeping the part gap from the cut edge. Only a rectangle that sits entirely inside the hole is used, so a round hole offers its inscribed square (plus any side pockets).</span></span></label>
+        </div>
+        <div>
+          <label class="small">Smallest useful opening (in)<span class="hint" tabindex="0">?<span class="hint-bubble">Cut-outs narrower than this on their short side (bolt holes, slots) are ignored. Measured before the part gap is taken off.</span></span></label>
+          <input type="number" id="dxfMinOpening" step="0.25" min="0.25" value="1">
+        </div>
       </div>
       <div id="dxfDiagnostics" style="margin-top:6px;"></div>
       <div style="max-height:46vh; overflow-y:auto; margin-top:10px;">
@@ -521,12 +541,43 @@
           <thead>
             <tr>
               <th style="width:28px;"></th><th>Part name</th><th class="col-w">W in</th><th class="col-h">H in</th>
-              <th class="col-q">Qty</th><th style="width:100px;">Source file</th><th class="col-del"></th>
+              <th class="col-q">Qty</th><th class="col-fill" title="Interior openings found in the DXF. Ticked: smaller parts may be nested inside them.">Fill</th><th style="width:100px;">Source file</th><th class="col-del"></th>
             </tr>
           </thead>
           <tbody id="dxfReviewBody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Openings editor: lets a hand-typed part (no DXF) carry openings too,
+     e.g. a frame, and re-fits openings that went stale after a resize. -->
+<div class="preview-modal" id="openingsModal">
+  <div class="preview-modal-col" style="max-width:720px;">
+    <div class="preview-modal-toolbar">
+      <span class="title" id="opTitle">Openings</span>
+      <div style="display:flex; gap:8px;">
+        <button class="ghost small" id="opCancelBtn">Cancel</button>
+        <button class="ghost small danger" id="opClearBtn">Remove all</button>
+        <button class="primary small" id="opSaveBtn">Save openings</button>
+      </div>
+    </div>
+    <div class="card" style="padding:16px 18px;">
+      <p class="op-note" id="opNote"></p>
+      <div class="op-frame-row">
+        <label class="small" style="margin:0;">Frame with rails</label>
+        <input type="number" id="opRail" step="0.0625" min="0" value="2">
+        <label class="small" style="margin:0;">in wide</label>
+        <button class="small" id="opMakeFrame">Make frame</button>
+      </div>
+      <table class="grid-table">
+        <thead><tr><th>From left in</th><th>From top in</th><th>Width in</th><th>Height in</th><th class="col-del"></th></tr></thead>
+        <tbody id="opBody"></tbody>
+      </table>
+      <div class="row-actions"><button class="small" id="opAddRow">+ Add opening</button></div>
+      <div class="op-error" id="opError"></div>
+      <div class="op-preview" id="opPreview"></div>
     </div>
   </div>
 </div>
@@ -596,6 +647,7 @@
             <tr>
               <th style="width:22px;">#</th><th>Name</th><th class="col-w">W in</th><th class="col-h">H in</th>
               <th class="col-q">Qty</th><th title="Allow 90&deg; rotation when nesting">Rot</th>
+              <th class="col-fill" title="Interior openings read from a DXF. Ticked: smaller parts may be nested inside them.">Fill</th>
               <th class="col-swatch"></th><th class="col-del"></th>
             </tr>
           </thead>
@@ -607,7 +659,7 @@
         </div>
         <input type="file" id="dxfFileInput" accept=".dxf" multiple style="display:none">
         <div style="margin-top:16px;">
-          <label class="small">Paste rows &mdash; one part per line: <code>name, width, height, qty</code></label>
+          <label class="small">Paste rows &mdash; one part per line: <code>name, width, height, qty</code>, optionally <code>, rail 1.5</code> for a frame<span class="hint" tabindex="0">?<span class="hint-bubble">A 5th value of <code>rail N</code> makes the part a frame with rails N" wide, so smaller parts can be nested in its opening. <code>Frame, 30, 20, 2, rail 1.5</code> = two 30 x 20 frames with 1.5" rails. Any other 5th value is ignored.</span></span></label>
           <textarea id="bulkPaste" placeholder="Shelf side, 24, 18, 12&#10;Back panel, 30, 20, 6"></textarea>
           <div class="row-actions">
             <button id="parseBulk">Add pasted rows</button>
@@ -660,6 +712,10 @@
             <div class="checkline">
               <input type="checkbox" id="defaultRotate" checked>
               <label class="small">Allow 90&deg; rotation for new parts by default</label>
+            </div>
+            <div class="checkline">
+              <input type="checkbox" id="fillOpenings" checked>
+              <label class="small">Nest parts inside openings<span class="hint" tabindex="0">?<span class="hint-bubble">Uses the cut-outs of frames and other parts that have openings (from a DXF, the &#9998; editor, or a rail value in pasted rows). On: the report also says how many sheets that saved compared with leaving the openings empty. Off: every part is nested as a solid rectangle. Per-part Fill boxes still apply when this is on.</span></span></label>
             </div>
             <div>
               <label class="small">Markup for customer quote (%)<span class="hint" tabindex="0">?<span class="hint-bubble">Optional. If you fill in $/sheet costs, this turns your raw material cost into a sell price — e.g. 35% markup on $100 of material quotes at $135. Leave blank to just see your own cost.</span></span></label>
@@ -847,7 +903,7 @@ function sampleData(){
   };
 }
 function defaultSettings(){
-  return { partGap:0.25, borderGap:0.5, defaultRotate:true, quality:2, markupPct:'' };
+  return { partGap:0.25, borderGap:0.5, defaultRotate:true, fillOpenings:true, quality:2, markupPct:'' };
 }
 
 function getProject(id){ return projects.find(p=>p.id===id); }
@@ -878,6 +934,7 @@ function saveWorkingIntoCurrentProject(){
     partGap: document.getElementById('partGap').value,
     borderGap: document.getElementById('borderGap').value,
     defaultRotate: document.getElementById('defaultRotate').checked,
+    fillOpenings: document.getElementById('fillOpenings').checked,
     quality: qualitySlider.value,
     markupPct: document.getElementById('markupPct').value
   };
@@ -894,6 +951,7 @@ function loadProjectIntoWorking(id){
   document.getElementById('partGap').value = s.partGap;
   document.getElementById('borderGap').value = s.borderGap;
   document.getElementById('defaultRotate').checked = !!s.defaultRotate;
+  document.getElementById('fillOpenings').checked = s.fillOpenings !== false;
   document.getElementById('markupPct').value = s.markupPct;
   qualitySlider.value = s.quality;
   updateQualityNote();
@@ -1122,10 +1180,18 @@ function renderParts(){
       <td class="col-h"><input type="number" step="0.0625" value="${p.height}" data-f="height" class="${dimsBad?'input-invalid':''}" title="${dimsBad?'Height must be greater than 0':''}"></td>
       <td class="col-q"><input type="number" step="1" value="${p.qty}" data-f="qty"></td>
       <td style="text-align:center;"><input type="checkbox" ${p.rotate?'checked':''} data-f="rotate"></td>
+      <td class="col-fill" data-fill-cell>${fillCellHtml(p, true)}</td>
       <td class="col-swatch"><input type="color" value="${p.color}" data-f="color"></td>
       <td class="col-del"><button class="ghost danger small" data-del="1" title="Remove">&times;</button></td>
     `;
-    tr.querySelectorAll('input').forEach(inp=>{
+    const fillTd = tr.querySelector('[data-fill-cell]');
+    fillTd.addEventListener('change', e=>{
+      if (e.target.matches('[data-fill]')){ p.useOpenings = e.target.checked; persistAll(); }
+    });
+    fillTd.addEventListener('click', e=>{
+      if (e.target.closest('[data-open-edit]')) openOpeningsEditor(p);
+    });
+    tr.querySelectorAll('input:not([data-fill])').forEach(inp=>{
       inp.addEventListener('input', ()=>{
         const f = inp.dataset.f;
         if (f==='name') p[f] = inp.value;
@@ -1137,6 +1203,7 @@ function renderParts(){
           const bad = !isValidDims(p.width, p.height);
           tr.querySelector('[data-f="width"]').classList.toggle('input-invalid', bad);
           tr.querySelector('[data-f="height"]').classList.toggle('input-invalid', bad);
+          fillTd.innerHTML = fillCellHtml(p, true);
         }
         persistAll();
       });
@@ -1175,8 +1242,8 @@ document.getElementById('parseBulk').addEventListener('click', ()=>{
     if (!line.trim()) return;
     const cells = line.split(/[,\t]/).map(c=>c.trim());
     if (cells.length < 3) return;
-    const [name, w, h, q] = cells;
-    parts.push({
+    const [name, w, h, q, rail] = cells;
+    const part = {
       id: nextId(),
       name: name || ('Part '+(parts.length+1)),
       width: parseFloat(w)||0,
@@ -1184,7 +1251,13 @@ document.getElementById('parseBulk').addEventListener('click', ()=>{
       qty: q!==undefined && q!=='' ? Math.max(1, parseInt(q)||1) : 1,
       rotate: rot,
       color: null
-    });
+    };
+    // Only an explicit "rail 1.5" (or "frame 1.5") makes a frame, so an extra
+    // numeric column from a spreadsheet (thickness, price) is never misread.
+    const railMatch = /^(?:rail|frame)\s*[:=]?\s*(\d*\.?\d+)\s*(?:"|in)?$/i.exec(rail || '');
+    const frame = railMatch ? frameOpening(part.width, part.height, parseFloat(railMatch[1])) : null;
+    if (frame) setPartOpenings(part, [frame]);
+    parts.push(part);
   });
   document.getElementById('bulkPaste').value = '';
   saveWorkingIntoCurrentProject();
@@ -1206,6 +1279,7 @@ updateQualityNote();
 document.getElementById('partGap').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('borderGap').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('defaultRotate').addEventListener('input', saveWorkingIntoCurrentProject);
+document.getElementById('fillOpenings').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('markupPct').addEventListener('input', ()=>{
   saveWorkingIntoCurrentProject();
   if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
@@ -1466,7 +1540,9 @@ checkPriceBook();
    nests bounding boxes, not true outlines (a true-shape engine was
    prototyped and tested side-by-side — on real jobs here it saved at most
    ~1.5 ft² per run, not enough to justify the added complexity), so all a
-   DXF needs to hand over is: a name, a width, a height, and a quantity.
+   DXF needs to hand over is: a name, a width, a height, a quantity — and,
+   optionally, the part's usable interior openings (see INTERIOR OPENINGS
+   below), so a frame's drop-out can carry smaller parts instead of scrap.
    Nothing is added to the project until the user presses "Add to parts
    list" in the review modal — every value shown there is editable, because
    an auto-detected unit or a filename-guessed quantity is a good starting
@@ -1574,10 +1650,10 @@ function dxfTransformPt(pt, tr){
   const c = Math.cos(tr.rot), s = Math.sin(tr.rot);
   return [tr.x + x*c - y*s, tr.y + x*s + y*c];
 }
-/* Only what's needed to get every point that ends up on a cut path — we're
-   building a bounding box, not a true outline, so unlike the nesting
-   prototype there's no need to track which loop is a hole vs an island;
-   every point simply widens the box. Splines fall back to their fit
+/* Only what's needed to get every point that ends up on a cut path. Each
+   entity becomes one run of points; every point widens the bounding box,
+   and dxfFindOpenings() later stitches the runs into closed loops to tell
+   the outline from its holes. Splines fall back to their fit
    points/control polygon if present, since a bounding box from a rough
    NURBS approximation is plenty accurate for estimating. */
 function dxfEntityToPoints(ent, sag, tr, blocks, depth, sink){
@@ -1701,8 +1777,283 @@ function dxfClusterRuns(runs, gap){
   return Object.values(groups).map(idxs => {
     const pts = [];
     idxs.forEach(i => pts.push(...runs[i].pts));
-    return { pts, bbox: dxfBboxOf(pts) };
+    return { pts, bbox: dxfBboxOf(pts), runs: idxs.map(i => runs[i]) };
   });
+}
+
+/* =====================================================================
+   INTERIOR OPENINGS
+   A laser-cut frame, ring or bracket with a big cut-out drops a piece of
+   material that is otherwise scrap. Here we find those cut-outs so the
+   nester can put smaller parts inside them.
+     1. Stitch the cut runs into closed loops (a hole drawn as four LINEs
+        or two ARCs is just as closed as a CIRCLE or a closed polyline).
+     2. Nest the loops by containment: depth 0 = an outline, depth 1 = a
+        hole in it. A hole that already has another shape drawn inside it
+        is left alone, since that space is spoken for.
+     3. Find the largest axis-aligned rectangles that fit inside each hole
+        (a coarse raster finds the candidate; an exact edge test then grows
+        it to the real boundary). Up to a few disjoint ones per hole, so a
+        round or L-shaped hole offers more than one pocket.
+   The packer still works in rectangles, so an opening is only ever
+   offered as a rectangle that is entirely inside the hole. Openings are
+   stored relative to the part's top-left corner, y down, the same frame
+   the sheet drawing uses.
+   ===================================================================== */
+const DXF_LOOP_TOL = 0.02;       // inches: endpoints closer than this count as joined
+const DXF_MAX_OPENINGS = 16;     // per part, keeps the packer's free list small
+const DXF_RECTS_PER_HOLE = 3;
+
+function dxfStitchLoops(runs, tol){
+  const near = (a, b) => Math.abs(a[0]-b[0]) <= tol && Math.abs(a[1]-b[1]) <= tol;
+  const loops = [], open = [];
+  runs.forEach(r => {
+    const pts = r.pts;
+    if (pts.length < 2) return;
+    if (pts.length >= 4 && near(pts[0], pts[pts.length-1])) loops.push(pts.slice(0, -1));
+    else open.push(pts);
+  });
+  // Endpoint hash, so joining runs stays fast on files with thousands of LINEs.
+  const cellOf = p => [Math.floor(p[0]/tol), Math.floor(p[1]/tol)];
+  const grid = new Map();
+  open.forEach((pts, i) => [0, 1].forEach(end => {
+    const [cx, cy] = cellOf(end ? pts[pts.length-1] : pts[0]);
+    const k = cx + ',' + cy;
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push({ i, end });
+  }));
+  const used = new Array(open.length).fill(false);
+  const mate = p => {
+    const [cx, cy] = cellOf(p);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++){
+      for (const e of grid.get((cx+dx) + ',' + (cy+dy)) || []){
+        if (used[e.i]) continue;
+        const run = open[e.i];
+        if (near(p, e.end ? run[run.length-1] : run[0])) return e;
+      }
+    }
+    return null;
+  };
+  for (let s = 0; s < open.length; s++){
+    if (used[s]) continue;
+    used[s] = true;
+    let chain = open[s].slice();
+    for (let e; (e = mate(chain[chain.length-1])); ){
+      used[e.i] = true;
+      const seg = e.end ? open[e.i].slice().reverse() : open[e.i];
+      chain = chain.concat(seg.slice(1));
+    }
+    for (let e; (e = mate(chain[0])); ){
+      used[e.i] = true;
+      const seg = e.end ? open[e.i] : open[e.i].slice().reverse();
+      chain = seg.slice(0, -1).concat(chain);
+    }
+    if (chain.length >= 4 && near(chain[0], chain[chain.length-1])) loops.push(chain.slice(0, -1));
+  }
+  return loops.filter(l => l.length >= 3);
+}
+function polyArea(poly){
+  let a = 0;
+  for (let i = 0, j = poly.length-1; i < poly.length; j = i++) a += (poly[j][0]+poly[i][0]) * (poly[j][1]-poly[i][1]);
+  return Math.abs(a / 2);
+}
+function pointInPoly(x, y, poly){
+  let inside = false;
+  for (let i = 0, j = poly.length-1; i < poly.length; j = i++){
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if ((yi > y) !== (yj > y) && x < (xj-xi) * (y-yi) / (yj-yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+// Does segment (x0,y0)-(x1,y1) pass through the OPEN interior of r?
+// Liang-Barsky clip; merely touching an edge or corner does not count.
+function segHitsRect(x0, y0, x1, y1, r){
+  let t0 = 0, t1 = 1;
+  const dx = x1-x0, dy = y1-y0;
+  const p = [-dx, dx, -dy, dy], q = [x0-r.x0, r.x1-x0, y0-r.y0, r.y1-y0];
+  for (let k = 0; k < 4; k++){
+    if (Math.abs(p[k]) < 1e-15){ if (q[k] <= 0) return false; continue; }
+    const t = q[k] / p[k];
+    if (p[k] < 0){ if (t > t1) return false; if (t > t0) t0 = t; }
+    else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return t1 - t0 > 1e-12;
+}
+function rectFitsInPoly(r, poly, taken){
+  if (!(r.x1 > r.x0 && r.y1 > r.y0)) return false;
+  if (!pointInPoly((r.x0+r.x1)/2, (r.y0+r.y1)/2, poly)) return false;
+  for (let i = 0, j = poly.length-1; i < poly.length; j = i++){
+    if (segHitsRect(poly[j][0], poly[j][1], poly[i][0], poly[i][1], r)) return false;
+  }
+  return !taken.some(t => r.x0 < t.x1-1e-9 && t.x0 < r.x1-1e-9 && r.y0 < t.y1-1e-9 && t.y0 < r.y1-1e-9);
+}
+/* Largest disjoint axis-aligned rectangles inside a polygon, each at least
+   minDim on its short side. Returned in the polygon's own coordinates. */
+function dxfInscribedRects(poly, minDim, maxCount){
+  const bb = dxfBboxOf(poly);
+  if (Math.min(bb.w, bb.h) < minDim) return [];
+  const cell = Math.max(Math.max(bb.w, bb.h) / 256, 1/128);
+  const nx = Math.max(1, Math.ceil(bb.w / cell)), ny = Math.max(1, Math.ceil(bb.h / cell));
+  const ok = new Uint8Array(nx * ny);
+  // Fill: cells whose centre is inside the polygon (scanline crossings).
+  for (let r = 0; r < ny; r++){
+    const yc = bb.y0 + (r + 0.5) * cell;
+    const xs = [];
+    for (let i = 0, j = poly.length-1; i < poly.length; j = i++){
+      const yi = poly[i][1], yj = poly[j][1];
+      if ((yi > yc) !== (yj > yc)) xs.push(poly[i][0] + (yc-yi) * (poly[j][0]-poly[i][0]) / (yj-yi));
+    }
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2){
+      const c0 = Math.max(0, Math.ceil((xs[k]-bb.x0)/cell - 0.5));
+      const c1 = Math.min(nx-1, Math.floor((xs[k+1]-bb.x0)/cell - 0.5));
+      for (let c = c0; c <= c1; c++) ok[r*nx + c] = 1;
+    }
+  }
+  // Block every cell the boundary passes through.
+  for (let i = 0, j = poly.length-1; i < poly.length; j = i++){
+    const ax = poly[j][0], ay = poly[j][1], bx = poly[i][0], by = poly[i][1];
+    const n = Math.ceil(Math.hypot(bx-ax, by-ay) / (cell/4)) + 1;
+    for (let s = 0; s <= n; s++){
+      const c = Math.floor((ax + (bx-ax)*s/n - bb.x0) / cell), r = Math.floor((ay + (by-ay)*s/n - bb.y0) / cell);
+      if (c >= 0 && c < nx && r >= 0 && r < ny) ok[r*nx + c] = 0;
+    }
+  }
+  const minCells = Math.max(1, Math.floor(minDim / cell) - 2);
+  const found = [];
+  const heights = new Int32Array(nx);
+  while (found.length < maxCount){
+    // Largest all-ok rectangle of cells (histogram + stack, one row at a time).
+    let best = null, bestArea = 0;
+    heights.fill(0);
+    for (let r = 0; r < ny; r++){
+      for (let c = 0; c < nx; c++) heights[c] = ok[r*nx + c] ? heights[c] + 1 : 0;
+      const stack = [];
+      for (let c = 0; c <= nx; c++){
+        const h = c < nx ? heights[c] : 0;
+        while (stack.length && heights[stack[stack.length-1]] >= h){
+          const top = stack.pop();
+          const H = heights[top], left = stack.length ? stack[stack.length-1] + 1 : 0, W = c - left;
+          if (H >= minCells && W >= minCells && H*W > bestArea){
+            bestArea = H*W; best = { c0:left, c1:c-1, r0:r-H+1, r1:r };
+          }
+        }
+        stack.push(c);
+      }
+    }
+    if (!best) break;
+    let rect = { x0: bb.x0 + best.c0*cell, x1: bb.x0 + (best.c1+1)*cell, y0: bb.y0 + best.r0*cell, y1: bb.y0 + (best.r1+1)*cell };
+    // The raster can be off by a sliver at a cell corner: shrink until exact.
+    for (let k = 0; k < 3 && !rectFitsInPoly(rect, poly, found); k++){
+      rect = { x0: rect.x0+cell, x1: rect.x1-cell, y0: rect.y0+cell, y1: rect.y1-cell };
+    }
+    const fits = rectFitsInPoly(rect, poly, found);
+    if (fits){
+      // Grow each side out to the true boundary (binary search, exact test).
+      for (let pass = 0; pass < 2; pass++){
+        ['x0', 'x1', 'y0', 'y1'].forEach(side => {
+          const dir = (side === 'x0' || side === 'y0') ? -1 : 1;
+          let lo = 0, hi = cell * 3;
+          for (let it = 0; it < 14; it++){
+            const mid = (lo + hi) / 2;
+            const trial = Object.assign({}, rect, { [side]: rect[side] + dir*mid });
+            if (rectFitsInPoly(trial, poly, found)) lo = mid; else hi = mid;
+          }
+          rect[side] += dir * lo;
+        });
+      }
+      if (Math.min(rect.x1-rect.x0, rect.y1-rect.y0) >= minDim) found.push(rect);
+    }
+    // Retire the cells this candidate covered, whether or not it was kept,
+    // so the next round looks somewhere new.
+    for (let r = best.r0; r <= best.r1; r++) for (let c = best.c0; c <= best.c1; c++) ok[r*nx + c] = 0;
+    if (fits){
+      for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++){
+        const cx0 = bb.x0 + c*cell, cy0 = bb.y0 + r*cell;
+        if (cx0 < rect.x1 && cx0 + cell > rect.x0 && cy0 < rect.y1 && cy0 + cell > rect.y0) ok[r*nx + c] = 0;
+      }
+    }
+  }
+  return found;
+}
+/* Usable openings of one part. `runs` are that part's cut runs (inches),
+   `bbox` its bounding box. Openings are snapped inward to `snap` so a
+   rounded number never claims space the hole doesn't have. */
+function dxfFindOpenings(runs, bbox, minDim, snap){
+  const loops = dxfStitchLoops(runs, DXF_LOOP_TOL)
+    .map(poly => ({ poly, area: polyArea(poly), bb: dxfBboxOf(poly), parent: -1, kids: 0 }))
+    .filter(l => l.area > 1e-9)
+    .sort((a, b) => b.area - a.area);
+  const result = { openings: [], skippedHoles: 0 };
+  if (loops.length < 2) return result;
+  // Parent = the smallest bigger loop that contains this one.
+  loops.forEach((l, i) => {
+    const [px, py] = l.poly[0];
+    for (let j = i-1; j >= 0; j--){
+      const o = loops[j];
+      if (l.bb.x0 >= o.bb.x0-1e-9 && l.bb.x1 <= o.bb.x1+1e-9 && l.bb.y0 >= o.bb.y0-1e-9 && l.bb.y1 <= o.bb.y1+1e-9 && pointInPoly(px, py, o.poly)){
+        l.parent = j; o.kids++; break;
+      }
+    }
+  });
+  const holes = loops.filter(l => l.parent >= 0 && loops[l.parent].parent < 0);
+  const rects = [];
+  holes.forEach(h => {   // largest first, so a perforated sheet stops early
+    if (h.kids){ if (Math.min(h.bb.w, h.bb.h) >= minDim) result.skippedHoles++; return; }
+    if (rects.length >= DXF_MAX_OPENINGS) return;
+    dxfInscribedRects(h.poly, minDim, DXF_RECTS_PER_HOLE).forEach(r => rects.push(r));
+  });
+  // The exact-boundary search lands a hair inside the edge; don't let that
+  // hair cost a whole snap step (1e-3 of 1/16" is well under any kerf).
+  const up = v => Math.ceil(v/snap - 1e-3) * snap, down = v => Math.floor(v/snap + 1e-3) * snap;
+  rects.forEach(r => {
+    const x = up(r.x0 - bbox.x0), xr = down(r.x1 - bbox.x0);
+    const y = up(bbox.y1 - r.y1), yb = down(bbox.y1 - r.y0);   // DXF y-up -> drawing y-down
+    const w = xr - x, h = yb - y;
+    if (Math.min(w, h) >= minDim - 1e-9) result.openings.push({ x:+x.toFixed(4), y:+y.toFixed(4), w:+w.toFixed(4), h:+h.toFixed(4) });
+  });
+  result.openings.sort((a, b) => b.w*b.h - a.w*a.h);
+  result.openings = result.openings.slice(0, DXF_MAX_OPENINGS);
+  return result;
+}
+
+/* ---- openings on a part definition ----
+   A part's openings were measured against the size it had at import
+   (openingsBase). If someone edits W/H afterwards the openings may no
+   longer be where the material actually is, so they're ignored until the
+   DXF is re-imported. */
+function openingsMatchDims(p){
+  const b = p.openingsBase;
+  return !!b && Math.abs(b.w - p.width) < 1e-6 && Math.abs(b.h - p.height) < 1e-6;
+}
+function partOpenings(p){
+  if (!p || p.useOpenings === false || !Array.isArray(p.openings) || !p.openings.length) return [];
+  if (!openingsMatchDims(p)) return [];
+  return p.openings.filter(o => o.x >= -1e-9 && o.y >= -1e-9 && o.x+o.w <= p.width+1e-9 && o.y+o.h <= p.height+1e-9
+    && o.w < p.width - 1e-9 && o.h < p.height - 1e-9);
+}
+function sanitizeOpenings(list){
+  if (!Array.isArray(list)) return undefined;
+  return list
+    .filter(o => o && [o.x, o.y, o.w, o.h].every(v => typeof v === 'number' && isFinite(v)) && o.w > 0 && o.h > 0 && o.x >= 0 && o.y >= 0)
+    .slice(0, DXF_MAX_OPENINGS)
+    .map(o => ({ x:o.x, y:o.y, w:o.w, h:o.h }));
+}
+/* The small "Fill" cell shown for a part in the parts list and the DXF
+   review table. `p` only needs openings/useOpenings/openingsBase/width/height.
+   `editable` adds the pencil that opens the openings editor (parts list only). */
+function fillCellHtml(p, editable){
+  const n = Array.isArray(p.openings) ? p.openings.length : 0;
+  const edit = editable ? `<button class="ghost small fill-edit" data-open-edit title="${n ? 'Edit this part\'s openings' : 'Add openings (e.g. make it a frame) so smaller parts can be nested inside'}">&#9998;</button>` : '';
+  let body;
+  if (!n) body = editable ? '' : '<span class="fill-none">&mdash;</span>';
+  else if (!openingsMatchDims(p)){
+    body = `<span class="fill-stale" title="${escAttr(`Size changed since these openings were set${p.openingsBase ? ` (was ${p.openingsBase.w}" x ${p.openingsBase.h}")` : ''}, so its ${n} opening${n===1?'':'s'} are ignored. Click the pencil to re-fit them, or re-import the DXF.`)}">&#9888;</span>`;
+  } else {
+    const sizes = p.openings.map(o => o.w.toFixed(2) + '" x ' + o.h.toFixed(2) + '"').join(', ');
+    body = `<label class="fill-tog" title="${escAttr(`${n} opening${n===1?'':'s'}: ${sizes}. Ticked: smaller parts may be nested inside.`)}"><input type="checkbox" data-fill ${p.useOpenings!==false?'checked':''}><span>${n}</span></label>`;
+  }
+  return editable ? `<span class="fill-cell-inner">${body}${edit}</span>` : body;
 }
 
 /* ---- filename quantity detection ----
@@ -1732,7 +2083,7 @@ function dxfGuessQtyFromName(rawName){
 function dxfRoundToSixteenth(v){ return Math.round(v * 16) / 16; }
 
 /* ---- review-modal state + wiring ---- */
-let dxfReviewRows = [];   // { name, w, h, qty, source, bad }
+let dxfReviewRows = [];   // { name, w, h, qty, source, openings, useOpenings, openBase, skippedHoles }
 let dxfRowSeq = 0;
 
 function dxfOpenModal(){
@@ -1784,8 +2135,11 @@ function dxfReadFile(file){
       }
 
       const split = document.getElementById('dxfSplitLoops').checked;
-      const clusters = split ? dxfClusterRuns(active, 0.05) : [{ pts: active.flatMap(r=>r.pts), bbox: null }];
+      const clusters = split ? dxfClusterRuns(active, 0.05) : [{ pts: active.flatMap(r=>r.pts), bbox: null, runs: active }];
       const round = document.getElementById('dxfRoundSixteenth').checked;
+      const detect = document.getElementById('dxfDetectOpenings').checked;
+      const minRaw = parseFloat(document.getElementById('dxfMinOpening').value);
+      const minOpening = Math.max(0.25, isNaN(minRaw) ? 1 : minRaw);
       const baseName = file.name.replace(/\.dxf$/i, '');
 
       clusters.forEach((cl, i) => {
@@ -1795,10 +2149,14 @@ function dxfReadFile(file){
         if (round){ w = dxfRoundToSixteenth(w); h = dxfRoundToSixteenth(h); }
         const label = clusters.length > 1 ? baseName + ' #' + (i+1) : baseName;
         const guess = dxfGuessQtyFromName(label);
+        const found = detect ? dxfFindOpenings(cl.runs, bbox, minOpening, round ? 1/16 : 1/64) : { openings: [], skippedHoles: 0 };
+        w = +w.toFixed(4); h = +h.toFixed(4);
         dxfReviewRows.push({
           id: 'dxfrow' + (dxfRowSeq++),
-          name: guess.name, w: +w.toFixed(4), h: +h.toFixed(4),
-          qty: guess.qty, source: file.name
+          name: guess.name, w, h,
+          qty: guess.qty, source: file.name,
+          openings: found.openings, useOpenings: found.openings.length > 0,
+          openBase: { w, h }, skippedHoles: found.skippedHoles
         });
       });
       renderDxfReviewTable();
@@ -1814,8 +2172,15 @@ function dxfReadFile(file){
 
 function renderDxfDiagnostics(){
   const host = document.getElementById('dxfDiagnostics');
-  if (!dxfFailedFiles.length){ host.innerHTML = ''; return; }
-  host.innerHTML = `<div class="dxf-diag warn"><b>${dxfFailedFiles.length} file${dxfFailedFiles.length===1?'':'s'} produced no shape:</b> ${dxfFailedFiles.map(escHtml).join(', ')}. Nothing was added for these — check the file isn't empty or entirely on a construction/dimension layer.</div>`;
+  let html = '';
+  const withOpenings = dxfReviewRows.filter(r => r.openings && r.openings.length);
+  const skipped = dxfReviewRows.reduce((s, r) => s + (r.skippedHoles || 0), 0);
+  if (withOpenings.length){
+    const n = withOpenings.reduce((s, r) => s + r.openings.length, 0);
+    html += `<div class="dxf-diag ok"><b>${n} usable opening${n===1?'':'s'}</b> found in ${withOpenings.length} part${withOpenings.length===1?'':'s'} &mdash; smaller parts will be nested inside them instead of that material dropping out as scrap. Untick <b>Fill</b> on a row to keep its openings empty.${skipped ? ` ${skipped} opening${skipped===1?' already has':'s already have'} another shape drawn inside and ${skipped===1?'was':'were'} left alone.` : ''}</div>`;
+  }
+  if (!dxfFailedFiles.length){ host.innerHTML = html; return; }
+  host.innerHTML = html + `<div class="dxf-diag warn"><b>${dxfFailedFiles.length} file${dxfFailedFiles.length===1?'':'s'} produced no shape:</b> ${dxfFailedFiles.map(escHtml).join(', ')}. Nothing was added for these — check the file isn't empty or entirely on a construction/dimension layer.</div>`;
 }
 
 function renderDxfReviewTable(){
@@ -1824,7 +2189,7 @@ function renderDxfReviewTable(){
     ? `Add ${dxfReviewRows.reduce((s,r)=>s+r.qty,0)} part${dxfReviewRows.reduce((s,r)=>s+r.qty,0)===1?'':'s'} to parts list`
     : 'Add to parts list';
   if (!dxfReviewRows.length){
-    body.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-faint); padding:26px 0;">Drop DXF files above to see them here first.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--text-faint); padding:26px 0;">Drop DXF files above to see them here first.</td></tr>`;
     return;
   }
   body.innerHTML = dxfReviewRows.map(r => {
@@ -1835,6 +2200,7 @@ function renderDxfReviewTable(){
       <td class="col-w"><input type="number" step="0.0625" value="${r.w}" data-f="w"></td>
       <td class="col-h"><input type="number" step="0.0625" value="${r.h}" data-f="h"></td>
       <td class="col-q"><input type="number" step="1" min="1" value="${r.qty}" data-f="qty"></td>
+      <td class="col-fill" data-fill-cell>${fillCellHtml(dxfRowAsPart(r))}</td>
       <td style="font-family:var(--mono); font-size:10.5px; color:var(--text-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escAttr(r.source)}">${escHtml(r.source)}</td>
       <td class="col-del"><button class="ghost danger small" data-del="1" title="Remove">&times;</button></td>
     </tr>`;
@@ -1843,39 +2209,163 @@ function renderDxfReviewTable(){
   body.querySelectorAll('tr').forEach(tr => {
     const row = dxfReviewRows.find(r => r.id === tr.dataset.row);
     if (!row) return;
-    tr.querySelectorAll('input').forEach(inp => {
+    const fillTd = tr.querySelector('[data-fill-cell]');
+    fillTd.addEventListener('change', e => { if (e.target.matches('[data-fill]')) row.useOpenings = e.target.checked; });
+    tr.querySelectorAll('input:not([data-fill])').forEach(inp => {
       inp.addEventListener('input', ()=>{
         const f = inp.dataset.f;
         if (f==='name') row.name = inp.value;
         else if (f==='qty') row.qty = Math.max(1, parseInt(inp.value,10)||1);
         else row[f] = parseFloat(inp.value) || 0;
-        if (f==='w' || f==='h') tr.classList.toggle('dxf-row-bad', !(row.w>0 && row.h>0));
+        if (f==='w' || f==='h'){
+          tr.classList.toggle('dxf-row-bad', !(row.w>0 && row.h>0));
+          fillTd.innerHTML = fillCellHtml(dxfRowAsPart(row));
+        }
         document.getElementById('dxfAddBtn').textContent = `Add ${dxfReviewRows.reduce((s,r)=>s+r.qty,0)} part${dxfReviewRows.reduce((s,r)=>s+r.qty,0)===1?'':'s'} to parts list`;
       });
     });
     tr.querySelector('[data-del]').addEventListener('click', ()=>{
       dxfReviewRows = dxfReviewRows.filter(r => r.id !== row.id);
       renderDxfReviewTable();
+      renderDxfDiagnostics();
     });
   });
 }
 function dxfSwatch(){ return '&#128196;'; }
+function dxfRowAsPart(r){ return { openings: r.openings, useOpenings: r.useOpenings, openingsBase: r.openBase, width: r.w, height: r.h }; }
 
 document.getElementById('dxfAddBtn').addEventListener('click', ()=>{
   const valid = dxfReviewRows.filter(r => r.w > 0 && r.h > 0);
   if (!valid.length){ alert('Nothing valid to add — every row needs a positive width and height.'); return; }
   const rot = document.getElementById('defaultRotate').checked;
   valid.forEach(r => {
-    parts.push({ id: nextId(), name: r.name || ('Part '+(parts.length+1)), width: r.w, height: r.h, qty: r.qty, rotate: rot, color: null });
+    const part = { id: nextId(), name: r.name || ('Part '+(parts.length+1)), width: r.w, height: r.h, qty: r.qty, rotate: rot, color: null };
+    if (r.openings && r.openings.length){
+      part.openings = r.openings;
+      part.useOpenings = r.useOpenings !== false;
+      part.openingsBase = { w: r.openBase.w, h: r.openBase.h };
+    }
+    parts.push(part);
   });
   saveWorkingIntoCurrentProject();
   render();
   document.getElementById('dxfModal').classList.remove('open');
   dxfFailedFiles = [];
 });
-['dxfUnitsSel','dxfRoundSixteenth','dxfSplitLoops'].forEach(id=>{
+['dxfUnitsSel','dxfRoundSixteenth','dxfSplitLoops','dxfDetectOpenings','dxfMinOpening'].forEach(id=>{
   document.getElementById(id).addEventListener('change', ()=>{}); // settings only affect files parsed AFTER a change, by design — re-drop if you flip a toggle mid-review
 });
+
+/* =====================================================================
+   OPENINGS EDITOR
+   Same openings a DXF would give, entered by hand: a frame preset (one
+   opening, rails all round) or any rectangles measured from the part's
+   top-left corner. Saving stamps the current size as openingsBase, which
+   is also how a stale set of openings gets re-fitted after a resize.
+   ===================================================================== */
+function frameOpening(w, h, rail){
+  if (!(rail > 0) || !isValidDims(w, h) || w - 2*rail <= 0 || h - 2*rail <= 0) return null;
+  return { x: rail, y: rail, w: +(w - 2*rail).toFixed(4), h: +(h - 2*rail).toFixed(4) };
+}
+function setPartOpenings(part, list){
+  // Editing openings must not quietly re-tick a Fill box someone unticked.
+  const wasOff = part.useOpenings === false && Array.isArray(part.openings) && part.openings.length > 0;
+  if (list.length){
+    part.openings = list.map(o => ({ x:+o.x.toFixed(4), y:+o.y.toFixed(4), w:+o.w.toFixed(4), h:+o.h.toFixed(4) }));
+    part.openingsBase = { w: part.width, h: part.height };
+    part.useOpenings = !wasOff;
+  } else {
+    delete part.openings; delete part.openingsBase; delete part.useOpenings;
+  }
+}
+// '' when the list is usable on a W x H part, otherwise what is wrong.
+function validateOpenings(list, W, H){
+  for (let i = 0; i < list.length; i++){
+    const o = list[i], n = '#' + (i+1);
+    if (![o.x, o.y, o.w, o.h].every(v => typeof v === 'number' && isFinite(v))) return `Opening ${n}: fill in all four numbers.`;
+    if (!(o.w > 0 && o.h > 0)) return `Opening ${n}: width and height must be greater than 0.`;
+    if (o.x < 0 || o.y < 0 || o.x + o.w > W + 1e-9 || o.y + o.h > H + 1e-9) return `Opening ${n} runs outside the ${W}" x ${H}" part.`;
+    if (o.w >= W - 1e-9 || o.h >= H - 1e-9) return `Opening ${n} spans the full ${o.w >= W - 1e-9 ? 'width' : 'height'} of the part, which would cut it in two.`;
+    for (let j = 0; j < i; j++){
+      if (rectsIntersect(o, list[j])) return `Openings #${j+1} and ${n} overlap.`;
+    }
+  }
+  if (list.length > DXF_MAX_OPENINGS) return `At most ${DXF_MAX_OPENINGS} openings per part.`;
+  return '';
+}
+
+let opEdit = null; // { part, rows:[{x,y,w,h}] }
+function openOpeningsEditor(part){
+  if (!isValidDims(part.width, part.height)){ alert('Give this part a valid width and height first.'); return; }
+  opEdit = { part, rows: (part.openings || []).map(o => Object.assign({}, o)) };
+  document.getElementById('opTitle').textContent = `Openings \u2014 ${part.name || 'part'} (${part.width}" x ${part.height}")`;
+  const stale = part.openings && part.openings.length && !openingsMatchDims(part);
+  document.getElementById('opNote').innerHTML = stale
+    ? `&#9888; These openings were set when the part was <b>${part.openingsBase.w}" x ${part.openingsBase.h}"</b>; it is now ${part.width}" x ${part.height}". Adjust them (or make a frame) and save to use them again.`
+    : 'Cut-outs inside this part where smaller parts can be nested. Measured from the part\'s top-left corner, before the part gap (the nester keeps the gap from the cut edge itself).';
+  renderOpeningsEditor();
+  document.getElementById('openingsModal').classList.add('open');
+}
+function closeOpeningsEditor(){
+  document.getElementById('openingsModal').classList.remove('open');
+  opEdit = null;
+}
+function renderOpeningsEditor(){
+  const body = document.getElementById('opBody');
+  body.innerHTML = opEdit.rows.length ? opEdit.rows.map((o, i) => `<tr class="row" data-i="${i}">
+      ${['x','y','w','h'].map(k => `<td><input type="number" step="0.0625" value="${o[k]}" data-k="${k}"></td>`).join('')}
+      <td class="col-del"><button class="ghost danger small" data-op-del title="Remove">&times;</button></td>
+    </tr>`).join('')
+    : '<tr><td colspan="5" style="text-align:center; color:var(--text-faint); padding:16px 0;">No openings yet &mdash; make a frame above or add one.</td></tr>';
+  body.querySelectorAll('tr[data-i]').forEach(tr => {
+    const o = opEdit.rows[+tr.dataset.i];
+    tr.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
+      o[inp.dataset.k] = parseFloat(inp.value);
+      refreshOpeningsCheck();
+    }));
+    tr.querySelector('[data-op-del]').addEventListener('click', () => {
+      opEdit.rows.splice(+tr.dataset.i, 1);
+      renderOpeningsEditor();
+    });
+  });
+  refreshOpeningsCheck();
+}
+function refreshOpeningsCheck(){
+  const { part, rows } = opEdit;
+  const err = validateOpenings(rows, part.width, part.height);
+  document.getElementById('opError').textContent = err;
+  document.getElementById('opSaveBtn').disabled = !!err;
+  // Preview: the part with its openings cut out, y down like the sheet drawing.
+  const W = part.width, H = part.height, sw = Math.max(W, H) / 200;
+  const holes = err ? '' : rows.map(o => `<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="#ffffff" stroke="#3a3a46" stroke-width="${sw}" stroke-dasharray="${sw*4} ${sw*3}"/>`).join('');
+  document.getElementById('opPreview').innerHTML =
+    `<svg viewBox="${-sw} ${-sw} ${W + 2*sw} ${H + 2*sw}" width="${Math.min(640, W / Math.max(W, H) * 640)}" preserveAspectRatio="xMidYMid meet">
+      <rect x="0" y="0" width="${W}" height="${H}" fill="${escAttr(part.color || '#c9ccd1')}" stroke="#28283a" stroke-width="${sw}"/>${holes}
+    </svg>`;
+}
+document.getElementById('opMakeFrame').addEventListener('click', () => {
+  const rail = parseFloat(document.getElementById('opRail').value);
+  const f = frameOpening(opEdit.part.width, opEdit.part.height, rail);
+  if (!f){ document.getElementById('opError').textContent = 'Rails that wide leave no opening in this part.'; return; }
+  opEdit.rows = [f];
+  renderOpeningsEditor();
+});
+document.getElementById('opAddRow').addEventListener('click', () => {
+  const { part } = opEdit;
+  const w = +(part.width / 3).toFixed(4), h = +(part.height / 3).toFixed(4);
+  opEdit.rows.push({ x: +((part.width - w) / 2).toFixed(4), y: +((part.height - h) / 2).toFixed(4), w, h });
+  renderOpeningsEditor();
+});
+document.getElementById('opSaveBtn').addEventListener('click', () => {
+  if (validateOpenings(opEdit.rows, opEdit.part.width, opEdit.part.height)) return;
+  setPartOpenings(opEdit.part, opEdit.rows);
+  closeOpeningsEditor();
+  saveWorkingIntoCurrentProject();
+  render();
+});
+document.getElementById('opClearBtn').addEventListener('click', () => { opEdit.rows = []; renderOpeningsEditor(); });
+document.getElementById('opCancelBtn').addEventListener('click', closeOpeningsEditor);
+document.getElementById('openingsModal').addEventListener('click', e => { if (e.target.id === 'openingsModal') closeOpeningsEditor(); });
 
 /* =====================================================================
    PACKING ALGORITHM  (MaxRects, optional 90deg rotation)
@@ -1942,14 +2432,29 @@ function splitFreeRects(freeRects, px, py, pw, ph){
     const fr = freeRects[i];
     if (!rectsIntersect(fr, placedRect)) continue;
     freeRects.splice(i,1);
-    if (placedRect.x > fr.x+1e-9) newRects.push({x:fr.x, y:fr.y, w:placedRect.x-fr.x, h:fr.h});
-    if (placedRect.x+placedRect.w < fr.x+fr.w-1e-9) newRects.push({x:placedRect.x+placedRect.w, y:fr.y, w:(fr.x+fr.w)-(placedRect.x+placedRect.w), h:fr.h});
-    if (placedRect.y > fr.y+1e-9) newRects.push({x:fr.x, y:fr.y, w:fr.w, h:placedRect.y-fr.y});
-    if (placedRect.y+placedRect.h < fr.y+fr.h-1e-9) newRects.push({x:fr.x, y:placedRect.y+placedRect.h, w:fr.w, h:(fr.y+fr.h)-(placedRect.y+placedRect.h)});
+    const keep = r => (fr.inOpening ? Object.assign(r, { inOpening: true }) : r);
+    if (placedRect.x > fr.x+1e-9) newRects.push(keep({x:fr.x, y:fr.y, w:placedRect.x-fr.x, h:fr.h}));
+    if (placedRect.x+placedRect.w < fr.x+fr.w-1e-9) newRects.push(keep({x:placedRect.x+placedRect.w, y:fr.y, w:(fr.x+fr.w)-(placedRect.x+placedRect.w), h:fr.h}));
+    if (placedRect.y > fr.y+1e-9) newRects.push(keep({x:fr.x, y:fr.y, w:fr.w, h:placedRect.y-fr.y}));
+    if (placedRect.y+placedRect.h < fr.y+fr.h-1e-9) newRects.push(keep({x:fr.x, y:placedRect.y+placedRect.h, w:fr.w, h:(fr.y+fr.h)-(placedRect.y+placedRect.h)}));
   }
   for (const r of newRects){ if (r.w>1e-6 && r.h>1e-6) freeRects.push(r); }
   pruneFreeRects(freeRects);
 }
+
+/* A placed part's openings become free space on the sheet. Each one is
+   inset by the part gap on its left/top; the gap the packer adds to the
+   right/bottom of every part it places supplies the other side, so a part
+   dropped into an opening keeps a full part gap from every cut edge. */
+function addOpeningFreeRects(freeRects, pl, partGap){
+  pl.openings.forEach(o => {
+    // inOpening: space inside a part, so it is never offered as a sheet remnant.
+    const r = { x: pl.x + o.x + partGap, y: pl.y + o.y + partGap, w: o.w - partGap, h: o.h - partGap, inOpening: true };
+    if (r.w > 1e-6 && r.h > 1e-6) freeRects.push(r);
+  });
+}
+// Material a placement actually consumes: its box, minus openings handed back.
+function placedArea(p){ return p.w*p.h - (p.openArea || 0); }
 
 function packSheetsOnce(sheetTypesIn, unitsSorted, partGap, borderGap, rule){
   const bins = [];
@@ -2002,8 +2507,17 @@ function packSheetsOnce(sheetTypesIn, unitsSorted, partGap, borderGap, rule){
     const rotated = best.rotated;
     const drawW = rotated ? unit.h : unit.w;
     const drawH = rotated ? unit.w : unit.h;
-    best.bin.placements.push({ x:best.x, y:best.y, w:drawW, h:drawH, rotated, name:unit.name, tag:unit.tag, color:unit.color, defId:unit.defId });
+    const pl = { x:best.x, y:best.y, w:drawW, h:drawH, rotated, name:unit.name, tag:unit.tag, color:unit.color, defId:unit.defId };
+    if (unit.openings && unit.openings.length){
+      // Same 90deg turn as rotatedBinView(): local (u,v) -> (H - v, u).
+      pl.openings = unit.openings.map(o => rotated ? { x: unit.h - o.y - o.h, y: o.x, w: o.h, h: o.w } : { x:o.x, y:o.y, w:o.w, h:o.h });
+      pl.openArea = pl.openings.reduce((s, o) => s + o.w*o.h, 0);
+    } else if (unit.holeArea){
+      pl.openArea = unit.holeArea;
+    }
+    best.bin.placements.push(pl);
     splitFreeRects(best.bin.freeRects, best.x, best.y, best.w, best.h);
+    if (pl.openings) addOpeningFreeRects(best.bin.freeRects, pl, partGap);
   }
   return { bins, unplaced, usage };
 }
@@ -2012,15 +2526,27 @@ function partTagFor(defId){
   const idx = parts.findIndex(p=>p.id===defId);
   return idx>=0 ? (idx+1) : '?';
 }
+// Project-wide "Nest parts inside openings" switch, set by runNesting()
+// (and by tryHarder() from the settings that run used) before packing.
+let nestOpeningsEnabled = true;
+function unitForPart(p, idx){
+  return { defId:p.id, name:p.name, tag:idx+1, w:p.width, h:p.height, allowRotate:!!p.rotate, color:p.color, openings: nestOpeningsEnabled ? partOpenings(p) : [] };
+}
 function expandUnits(partsIn){
   const units = [];
   partsIn.forEach((p, idx)=>{
     if (!isValidDims(p.width, p.height)) return; // invalid dimensions never get placed or faked
-    for (let i=0;i<(p.qty||0);i++){
-      units.push({ defId:p.id, name:p.name, tag:idx+1, w:p.width, h:p.height, allowRotate:!!p.rotate, color:p.color });
-    }
+    for (let i=0;i<(p.qty||0);i++) units.push(unitForPart(p, idx));
   });
   return units;
+}
+/* Rebuild a packing unit from a placement already on a sheet. Prefers the
+   live part definition, so rotation permission and openings come from the
+   part rather than from how it happened to land. */
+function unitFromPlacement(pl, partsIn){
+  const idx = partsIn.findIndex(x=>x.id===pl.defId);
+  if (idx >= 0) return unitForPart(partsIn[idx], idx);
+  return { defId:pl.defId, name:pl.name, tag:pl.tag, color:pl.color, w: pl.rotated ? pl.h : pl.w, h: pl.rotated ? pl.w : pl.h, allowRotate:true, openings:[] };
 }
 function shuffle(arr){
   const a = arr.slice();
@@ -2035,17 +2561,21 @@ const sortStrategies = [
   (a,b)=> b.h-a.h || b.w-a.w,
   (a,b)=> Math.min(b.w,b.h)-Math.min(a.w,a.h),
 ];
-function scoreResult(res, sheetTypesIn){
-  const totalArea = res.bins.reduce((s,b)=>s+b.w*b.h,0);
-  const usedArea = res.bins.reduce((s,b)=>s+b.placements.reduce((s2,p)=>s2+p.w*p.h,0),0);
-  const waste = totalArea - usedArea;
+// What a result costs: unplaced parts first, then $ (or sheet count when
+// prices are missing). No area tie-break - see scoreResult.
+function costScore(res, sheetTypesIn){
   // If every sheet type has a price, compare total $ spent (a mix of cheaper/smaller
   // sheets can beat fewer-but-pricier sheets). Otherwise fall back to sheet count.
   const costKnown = sheetTypesIn.length>0 && sheetTypesIn.every(st=> st.cost!=null);
   const costTier = costKnown
     ? res.bins.reduce((s,b)=> s + (b.sheetType.cost||0), 0)
     : res.bins.length;
-  return res.unplaced.length*1e12 + costTier*1e6 + waste;
+  return res.unplaced.length*1e12 + costTier*1e6;
+}
+function scoreResult(res, sheetTypesIn){
+  const totalArea = res.bins.reduce((s,b)=>s+b.w*b.h,0);
+  const usedArea = res.bins.reduce((s,b)=>s+b.placements.reduce((s2,p)=>s2+placedArea(p),0),0);
+  return costScore(res, sheetTypesIn) + (totalArea - usedArea);
 }
 
 /* Different priority orders in which to reach for sheet types when a new
@@ -2093,20 +2623,60 @@ function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, opti
     }
   }
 
+  // The packer is greedy, so filling an opening early can, rarely, crowd a
+  // later part out. Every attempt is therefore also run with openings left
+  // empty ("plain"), and the best of both wins: using openings can never
+  // cost a sheet. The best plain layout is also the report's "without
+  // openings" comparison - found in the same search, so it can't beat the
+  // result by luck of a different random shuffle.
+  if (hasOpenings(units)) attempts.slice().forEach(a=> attempts.push({ order: a.order.map(plainUnit), rule: a.rule, plain: true }));
+
   // "Optimize sheet mix": also try several sheet-type priority orders (not
   // just the order they're listed in) and keep whichever combination scores
   // best overall. Off by default since with one sheet type it's a no-op,
   // and with several it's the slower, more thorough pass.
   const sheetOrders = optimizeMix ? sheetOrderVariants(sheetTypesIn) : [sheetTypesIn];
 
-  let best = null;
+  let best = null, bestScore = Infinity, bestPlain = null, bestPlainScore = Infinity;
   for (const sheetOrder of sheetOrders){
     for (const a of attempts){
       const res = packSheetsOnce(sheetOrder, a.order, partGap, borderGap, a.rule);
-      if (!best || scoreResult(res, sheetTypesIn) < scoreResult(best, sheetTypesIn)) best = res;
+      const sc = scoreResult(res, sheetTypesIn);
+      if (sc < bestScore){ best = res; bestScore = sc; }
+      if (a.plain && sc < bestPlainScore){ bestPlain = res; bestPlainScore = sc; }
     }
   }
+  if (best) best.plainBest = bestPlain;
   return best;
+}
+function hasOpenings(units){ return units.some(u=> u.openings && u.openings.length); }
+// A unit's openings-empty twin. holeArea keeps its material count equal to
+// the filled twin's, so the two only differ where it matters: sheets, cost,
+// unplaced.
+function plainUnit(u){
+  return (u.openings && u.openings.length)
+    ? Object.assign({}, u, { openings: [], holeArea: u.openings.reduce((a, o)=> a + o.w*o.h, 0) }) : u;
+}
+function withOpeningsOff(fn){
+  const was = nestOpeningsEnabled;
+  nestOpeningsEnabled = false;
+  try { return fn(); } finally { nestOpeningsEnabled = was; }
+}
+function baselineStats(res, sheetTypesIn){
+  const st = strategyStats(res.bins, res.unplaced);
+  return { sheets: st.sheets, cost: st.cost, costKnown: st.costKnown, unplacedCount: st.unplacedCount, costScore: costScore(res, sheetTypesIn) };
+}
+/* Rightsize a packed result and settle its "without openings" comparison.
+   The plain layout is rightsized with openings off so it stays plain; if
+   that tips it ahead on cost, it simply becomes the result. */
+function finishStrategy(res, sheetTypesIn, partsIn, partGap, borderGap){
+  rightsizeBins(res.bins, sheetTypesIn, partsIn, partGap, borderGap, res.usage || {});
+  const plain = res.plainBest || null;
+  if (plain && plain !== res){
+    withOpeningsOff(()=> rightsizeBins(plain.bins, sheetTypesIn, partsIn, partGap, borderGap, plain.usage || {}));
+    if (costScore(plain, sheetTypesIn) < costScore(res, sheetTypesIn)) res = plain;
+  }
+  return { result: res, noOpenings: plain ? baselineStats(plain, sheetTypesIn) : null };
 }
 
 /* Runs N additional RANDOMIZED attempts (shuffled part orderings × all
@@ -2115,20 +2685,12 @@ function packSheetsBest(sheetTypesIn, partsIn, partGap, borderGap, quality, opti
    the "Try harder" button uses: it never makes a layout worse, it only
    keeps a new arrangement if it genuinely beats the current one. Returns
    { result, improved } so the UI can tell the user whether anything changed. */
-function orderFromBins(bins){
+function orderFromBins(bins, partsIn){
   // Reconstruct the approximate placement order from an already-packed
   // result (reading parts off sheet by sheet), so it can be used as a
   // starting point for local-search perturbation.
   const order = [];
-  bins.forEach(bin=>{
-    bin.placements.forEach(p=>{
-      order.push({
-        defId: p.defId, name: p.name, tag: p.tag, color: p.color,
-        w: p.rotated ? p.h : p.w, h: p.rotated ? p.w : p.h,
-        allowRotate: true
-      });
-    });
-  });
+  bins.forEach(bin=> bin.placements.forEach(p=> order.push(unitFromPlacement(p, partsIn))));
   return order;
 }
 function twoExchange(order){
@@ -2153,11 +2715,13 @@ function packMoreAttempts(sheetTypesIn, partsIn, partGap, borderGap, currentBest
   let best = currentBest;
   let improved = false;
   let bestScore = scoreResult(currentBest, sheetTypesIn);
+  const twins = hasOpenings(units);
+  let bestPlain = null, bestPlainScore = Infinity;
 
   // A valid base to perturb only exists if the current best actually placed
   // every part (nothing unplaced) — otherwise local search has no sound
   // starting sequence, so stick to pure random restarts.
-  const baseOrder = (currentBest.unplaced && currentBest.unplaced.length===0) ? orderFromBins(currentBest.bins) : null;
+  const baseOrder = (currentBest.unplaced && currentBest.unplaced.length===0) ? orderFromBins(currentBest.bins, partsIn) : null;
   const canLocalSearch = baseOrder && baseOrder.length === units.length;
 
   for (let n=0; n<extraCount; n++){
@@ -2176,8 +2740,14 @@ function packMoreAttempts(sheetTypesIn, partsIn, partGap, borderGap, currentBest
     const res = packSheetsOnce(sheetOrder, order, partGap, borderGap, rule);
     const sc = scoreResult(res, sheetTypesIn);
     if (sc < bestScore - 1e-6){ best = res; bestScore = sc; improved = true; }
+    if (twins){
+      const pres = packSheetsOnce(sheetOrder, order.map(plainUnit), partGap, borderGap, rule);
+      const psc = scoreResult(pres, sheetTypesIn);
+      if (psc < bestPlainScore){ bestPlain = pres; bestPlainScore = psc; }
+      if (psc < bestScore - 1e-6){ best = pres; bestScore = psc; improved = true; }
+    }
   }
-  return { result: best, improved };
+  return { result: best, improved, plainBest: bestPlain };
 }
 
 /* =====================================================================
@@ -2208,14 +2778,7 @@ function rightsizeBins(bins, sheetTypesIn, partsIn, partGap, borderGap, usage){
 
   bins.forEach(bin=>{
     const currentRank = rank(bin.sheetType);
-    const unitsHere = bin.placements.map(p=>{
-      const partDef = partsIn.find(x=>x.id===p.defId);
-      return {
-        defId:p.defId, name:p.name, color:p.color,
-        w: p.rotated ? p.h : p.w, h: p.rotated ? p.w : p.h,
-        allowRotate: partDef ? !!partDef.rotate : true
-      };
-    });
+    const unitsHere = bin.placements.map(p=> unitFromPlacement(p, partsIn));
     for (const candidate of candidates){
       if (candidate.id === bin.sheetType.id) continue;
       if (rank(candidate) >= currentRank - 1e-9) continue; // only strictly cheaper/smaller is worth trying
@@ -2277,6 +2840,7 @@ function findRemnants(bins, minDim){
   bins.forEach((bin, i)=>{
     let largest = null;
     bin.freeRects.forEach(fr=>{
+      if (fr.inOpening) return; // inside a frame: a drop-out, not sheet stock
       if (fr.w>=minDim && fr.h>=minDim && (!largest || fr.w*fr.h > largest.w*largest.h)) largest = fr;
     });
     if (largest){
@@ -2376,6 +2940,7 @@ function rotatedBinView(bin){
     w: p.h,
     h: p.w,
     labelW: p.w, labelH: p.h, labelR: p.rotated,
+    openings: p.openings ? p.openings.map(o=> ({ x: p.h - o.y - o.h, y: o.x, w: o.h, h: o.w })) : p.openings,
   }));
   return v;
 }
@@ -2492,7 +3057,7 @@ function strategyStats(bins, unplaced){
   let sheetArea=0, usedArea=0, cost=0, costKnown=true;
   bins.forEach(b=>{
     sheetArea += b.w*b.h;
-    usedArea += b.placements.reduce((s,p)=>s+p.w*p.h,0);
+    usedArea += b.placements.reduce((s,p)=>s+placedArea(p),0);
     if (b.sheetType.cost==null) costKnown = false;
   });
   if (costKnown){
@@ -2519,19 +3084,17 @@ function computeAllStrategies(partGap, borderGap, quality, sheetTypesForNesting)
 
   validSheets.forEach(st=>{
     if (!isViableAlone(st, parts, partGap, borderGap)) return;
-    const res = packSheetsBest([st], parts, partGap, borderGap, quality, false);
-    rightsizeBins(res.bins, [st], parts, partGap, borderGap, res.usage);
+    const { result: res, noOpenings } = finishStrategy(packSheetsBest([st], parts, partGap, borderGap, quality, false), [st], parts, partGap, borderGap);
     strategyResults['single:'+st.id] = Object.assign(
-      { label: st.name, bins: res.bins, unplaced: res.unplaced },
+      { label: st.name, bins: res.bins, unplaced: res.unplaced, noOpenings },
       strategyStats(res.bins, res.unplaced)
     );
   });
 
   if (validSheets.length > 1){
-    const res = packSheetsBest(validSheets, parts, partGap, borderGap, quality, true);
-    rightsizeBins(res.bins, validSheets, parts, partGap, borderGap, res.usage);
+    const { result: res, noOpenings } = finishStrategy(packSheetsBest(validSheets, parts, partGap, borderGap, quality, true), validSheets, parts, partGap, borderGap);
     strategyResults['mixed'] = Object.assign(
-      { label: 'Optimized mix (all sheet types)', bins: res.bins, unplaced: res.unplaced },
+      { label: 'Optimized mix (all sheet types)', bins: res.bins, unplaced: res.unplaced, noOpenings },
       strategyStats(res.bins, res.unplaced)
     );
   }
@@ -2551,9 +3114,14 @@ function computeAllStrategies(partGap, borderGap, quality, sheetTypesForNesting)
 function buildStrategyCompareTable(sortedKeys){
   let html = '<div class="card" style="margin-bottom:22px;"><h2>Compare nesting strategies <span class="count">pick which one the report below uses</span></h2>';
   html += '<p style="font-size:11.5px; color:var(--text-dim); margin:0 0 12px 0;">Efficiency is per-sheet fill % (two very different strategies can share the same %). <b style="color:var(--text);">Wasted material</b> and <b style="color:var(--text);">cost</b> are the totals that actually tell you which is cheaper overall.</p>';
-  html += '<table class="breakdown"><thead><tr><th>Strategy</th><th>Sheets</th><th>Efficiency</th><th>Wasted material</th><th>Cost</th><th>Unplaced</th><th></th></tr></thead><tbody>';
+  const showBase = sortedKeys.some(k=> strategyResults[k].noOpenings);
+  html += '<table class="breakdown"><thead><tr><th>Strategy</th><th>Sheets</th><th>Efficiency</th><th>Wasted material</th><th>Cost</th><th>Unplaced</th>'
+    + (showBase ? '<th title="The same strategy with every opening left empty">Without openings</th>' : '') + '<th></th></tr></thead><tbody>';
   sortedKeys.forEach((key,i)=>{
     const s = strategyResults[key];
+    const b = s.noOpenings;
+    const baseCell = !showBase ? '' : !b ? '<td>&mdash;</td>'
+      : `<td>${b.sheets} sht${b.costKnown ? ' &middot; $'+b.cost.toFixed(2) : ''}${b.sheets>s.sheets ? ' <span style="color:var(--green); font-size:10.5px;" title="Sheets saved by nesting into openings">saves '+(b.sheets-s.sheets)+'</span>' : ''}</td>`;
     const isSelected = key===selectedStrategyKey;
     const wasteSqFt = (s.wastedArea/144).toFixed(1);
     html += `<tr>
@@ -2563,6 +3131,7 @@ function buildStrategyCompareTable(sortedKeys){
       <td>${wasteSqFt} ft&sup2;</td>
       <td>${s.costKnown ? '$'+s.cost.toFixed(2) : '&mdash;'}</td>
       <td>${s.unplacedCount ? '<b style="color:var(--red)">'+s.unplacedCount+'</b>' : '0'}</td>
+      ${baseCell}
       <td><button class="small ${isSelected?'primary':''}" data-select-strategy="${key}">${isSelected ? 'Selected' : 'Use this'}</button></td>
     </tr>`;
   });
@@ -2594,6 +3163,10 @@ function runNesting(){
     return;
   }
 
+  // With openings on, each strategy also carries its best openings-empty
+  // layout (noOpenings), so the report can say what they saved.
+  const fillOpenings = document.getElementById('fillOpenings').checked;
+  nestOpeningsEnabled = fillOpenings;
   const sortedKeys = computeAllStrategies(partGap, borderGap, quality, validSheetTypesForNesting);
   if (sortedKeys.length===0){
     lastNestResult = null;
@@ -2601,7 +3174,7 @@ function runNesting(){
     return;
   }
   selectedStrategyKey = sortedKeys[0];
-  lastRunParams = { partGap, borderGap, quality };
+  lastRunParams = { partGap, borderGap, quality, fillOpenings };
   lastInvalidNote = invalidNote;
 
   let html = invalidNote;
@@ -2651,13 +3224,24 @@ function tryHarder(partGap, borderGap, quality){
     if (currentProjectId !== startProjectId || !strategyResults[startStrategyKey]){ return; }
 
     const EXTRA = 60;
+    nestOpeningsEnabled = !lastRunParams || lastRunParams.fillOpenings !== false;
     const currentBest = { bins: s.bins, unplaced: s.unplaced };
-    const { result, improved } = packMoreAttempts(strategySheets, parts, partGap, borderGap, currentBest, EXTRA);
+    const { result, improved, plainBest } = packMoreAttempts(strategySheets, parts, partGap, borderGap, currentBest, EXTRA);
+    const target = strategyResults[startStrategyKey];
+    let main = result, better = improved, baselineChanged = false;
+    if (improved) rightsizeBins(main.bins, strategySheets, parts, partGap, borderGap, main.usage || {});
+    // The extra search ran with openings empty too, so the comparison gets
+    // the same effort: a Try-harder gain is not credited to the openings.
+    if (plainBest && target.noOpenings){
+      if (plainBest !== main) withOpeningsOff(()=> rightsizeBins(plainBest.bins, strategySheets, parts, partGap, borderGap, plainBest.usage || {}));
+      const cand = baselineStats(plainBest, strategySheets);
+      if (cand.costScore < target.noOpenings.costScore){ target.noOpenings = cand; baselineChanged = true; }
+      if (plainBest !== main && costScore(plainBest, strategySheets) < costScore(main, strategySheets)){ main = plainBest; better = true; }
+    }
 
-    if (improved){
-      rightsizeBins(result.bins, strategySheets, parts, partGap, borderGap, result.usage || {});
-      const newStats = strategyStats(result.bins, result.unplaced);
-      Object.assign(strategyResults[startStrategyKey], { bins: result.bins, unplaced: result.unplaced }, newStats);
+    if (better || baselineChanged){
+      const newStats = strategyStats(main.bins, main.unplaced);
+      if (better) Object.assign(target, { bins: main.bins, unplaced: main.unplaced }, newStats);
 
       // Only redraw the on-screen report if the user is still looking at the
       // same strategy this result belongs to — if they've since clicked a
@@ -2686,6 +3270,11 @@ function tryHarder(partGap, borderGap, quality){
       });
       renderReportBody(partGap, borderGap, quality);
       const after = document.getElementById('tryHarderNote');
+      if (!better){
+        after.style.color = 'var(--text-dim)';
+        after.textContent = `No better layout found after ${EXTRA} more tries; the openings comparison above was refined. (Click again to try another ${EXTRA}.)`;
+        return;
+      }
       after.style.color = 'var(--green)';
       after.textContent = `✓ Found a better layout — ${newStats.sheets} sheet${newStats.sheets===1?'':'s'}, ${newStats.efficiency.toFixed(1)}% efficiency, ${(newStats.wastedArea/144).toFixed(1)} ft² wasted. Updated above.`;
     } else {
@@ -2703,12 +3292,13 @@ function renderReportBody(partGap, borderGap, quality){
   lastNestResult = { bins };
   const commonLines = detectCommonLines(bins, partGap);
   const remnants = findRemnants(bins, 6);
+  const nestedInOpenings = countNestedInOpenings(bins);
 
   const byType = {};
   sheetTypes.forEach(st=> byType[st.id] = { st, sheets:0, area:0, used:0 });
   bins.forEach(b=>{
     const area = b.w*b.h;
-    const used = b.placements.reduce((s2,p)=>s2+p.w*p.h,0);
+    const used = b.placements.reduce((s2,p)=>s2+placedArea(p),0);
     const rec = byType[b.sheetType.id];
     rec.sheets += 1; rec.area += area; rec.used += used;
   });
@@ -2754,6 +3344,10 @@ function renderReportBody(partGap, borderGap, quality){
   }
 
   html += `<div class="gap-note">Strategy: <span>${escHtml(strategyResults[selectedStrategyKey].label)}</span> &nbsp;&middot;&nbsp; Part gap: <span>${partGap}"</span> &nbsp;&middot;&nbsp; Border gap: <span>${borderGap}"</span> &nbsp;&middot;&nbsp; Quality pass: <span>${['Fast','Balanced','Quality'][quality]}</span></div>`;
+  const savingText = openingsSavingText(s, nestedInOpenings);
+  if (savingText){
+    html += `<div class="gap-note" id="openingsNote" style="margin-top:-16px;">&#9635; <span>${escHtml(savingText)}</span></div>`;
+  }
   if (reportPrefs.commonLines && commonLines.count>0){
     html += `<div class="gap-note" style="margin-top:-16px;">&#9878; <span>${commonLines.count}</span> common-line opportunit${commonLines.count===1?'y':'ies'} detected (~<span>${commonLines.totalLength.toFixed(1)}"</span> total edge length) — adjacent parts that are exactly aligned. Cutting these shared edges as one line instead of two saves kerf width and a pierce each.</div>`;
   }
@@ -2918,7 +3512,7 @@ function buildOverviewContent(bins, containerId){
   bins.forEach(b=>{
     usage[b.sheetType.id] = (usage[b.sheetType.id]||0)+1;
     totalSheetArea += b.w*b.h;
-    totalUsedArea += b.placements.reduce((s,p)=>s+p.w*p.h,0);
+    totalUsedArea += b.placements.reduce((s,p)=>s+placedArea(p),0);
   });
   sheetTypes.forEach(st=>{ if (st.cost!=null){ anyCost = true; totalCost += (usage[st.id]||0) * st.cost; } });
   const overallEff = totalSheetArea>0 ? (100*totalUsedArea/totalSheetArea) : 0;
@@ -2954,7 +3548,7 @@ function buildOverviewContent(bins, containerId){
   const cols = n<=1 ? 1 : n<=2 ? 2 : n<=6 ? 3 : n<=12 ? 4 : 5;
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   bins.forEach((bin, i)=>{
-    const eff = bin.w*bin.h>0 ? (100*bin.placements.reduce((s,p)=>s+p.w*p.h,0)/(bin.w*bin.h)) : 0;
+    const eff = bin.w*bin.h>0 ? (100*bin.placements.reduce((s,p)=>s+placedArea(p),0)/(bin.w*bin.h)) : 0;
     const card = document.createElement('div');
     card.className = 'ov-card' + (sheetPrintPlan(bin, i).include ? '' : ' pg-skip');
     const cardHead = document.createElement('div');
@@ -2975,6 +3569,85 @@ function buildOverviewContent(bins, containerId){
   foot.id = (containerId === 'overviewPage') ? 'exportFooterOverview' : '';
   container.appendChild(grid);
   container.appendChild(foot);
+}
+
+/* Openings on a placed part are drawn as clear, dashed pockets so it reads
+   as a frame rather than a solid plate, with whatever was nested inside
+   drawn on top of it (it was placed later, so it comes later in the list). */
+function drawPlacementOpenings(ctx, p, scale, px, py, lineW){
+  if (!p.openings || !p.openings.length) return;
+  ctx.save();
+  p.openings.forEach(o=>{
+    const ox = px + o.x*scale, oy = py + o.y*scale, ow = o.w*scale, oh = o.h*scale;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(ox, oy, ow, oh);
+    ctx.setLineDash([Math.max(2, lineW*4), Math.max(1.5, lineW*3)]);
+    ctx.strokeStyle = 'rgba(40,40,50,0.55)';
+    ctx.lineWidth = lineW;
+    ctx.strokeRect(ox + lineW/2, oy + lineW/2, ow - lineW, oh - lineW);
+  });
+  ctx.restore();
+}
+/* Where a part's label can go without landing in its opening (and under
+   whatever got nested there): the widest solid band around the openings,
+   preferring the top/bottom rails since text reads horizontally. Returned
+   in the placement's own units. */
+function placementLabelBox(p){
+  const os = p.openings;
+  if (!os || !os.length) return { x:0, y:0, w:p.w, h:p.h };
+  const minX = Math.min(...os.map(o=>o.x)), minY = Math.min(...os.map(o=>o.y));
+  const maxX = Math.max(...os.map(o=>o.x+o.w)), maxY = Math.max(...os.map(o=>o.y+o.h));
+  const bands = [
+    { x:0, y:0, w:p.w, h:minY, horiz:true },
+    { x:0, y:maxY, w:p.w, h:p.h-maxY, horiz:true },
+    { x:0, y:0, w:minX, h:p.h },
+    { x:maxX, y:0, w:p.w-maxX, h:p.h },
+  ].filter(b=> b.w > 1e-6 && b.h > 1e-6);
+  if (!bands.length) return { x:0, y:0, w:p.w, h:p.h };
+  bands.sort((a,b)=> (b.w*b.h*(b.horiz?1.5:1)) - (a.w*a.h*(a.horiz?1.5:1)));
+  return bands[0];
+}
+/* What nesting into openings saved, against the same strategy nested with
+   openings left empty. null when there's nothing to compare. */
+function openingsSaving(s){
+  const b = s && s.noOpenings;
+  if (!b) return null;
+  return {
+    withSheets: s.sheets, withoutSheets: b.sheets,
+    sheetsSaved: b.sheets - s.sheets,
+    costSaved: (s.costKnown && b.costKnown) ? b.cost - s.cost : null,
+    // fewer unplaced counts as a saving too (stock limits)
+    unplacedSaved: b.unplacedCount - s.unplacedCount,
+  };
+}
+function openingsSavingText(s, nested){
+  const sv = openingsSaving(s);
+  const lead = nested + ' part' + (nested===1?'':'s') + ' nested inside the openings of other parts';
+  if (!sv) return nested > 0 ? lead + ' - material that would otherwise drop out as scrap.' : '';
+  if (sv.sheetsSaved > 0){
+    return lead + ': saves ' + sv.sheetsSaved + ' sheet' + (sv.sheetsSaved===1?'':'s')
+      + (sv.costSaved != null && sv.costSaved > 0 ? ' ($' + sv.costSaved.toFixed(2) + ')' : '')
+      + ' - ' + sv.withSheets + ' instead of ' + sv.withoutSheets + ' with openings left empty.';
+  }
+  if (sv.costSaved != null && sv.costSaved > 0.005) return lead + ': saves $' + sv.costSaved.toFixed(2) + ' on a cheaper sheet mix (' + sv.withSheets + ' sheet' + (sv.withSheets===1?'':'s') + ').';
+  if (sv.unplacedSaved > 0) return lead + ': fits ' + sv.unplacedSaved + ' more part' + (sv.unplacedSaved===1?'':'s') + ' on the stock you have.';
+  const same = sv.withSheets + ' sheet' + (sv.withSheets===1?'':'s');
+  return nested > 0 ? lead + ', but it takes the same ' + same + ' either way on this job.'
+    : 'Openings checked: same ' + same + ' with or without them on this job.';
+}
+
+/* How many placements sit inside another placement's footprint, i.e. were
+   nested into an opening. */
+function countNestedInOpenings(bins){
+  let n = 0;
+  bins.forEach(b=>{
+    const hosts = b.placements.filter(p=> p.openings && p.openings.length);
+    if (!hosts.length) return;
+    b.placements.forEach(q=>{
+      if (hosts.some(h=> h!==q && rectContains(h, q))) n++;
+    });
+  });
+  return n;
 }
 
 function drawSheetThumb(canvas, bin){
@@ -3008,16 +3681,19 @@ function drawSheetThumb(canvas, bin){
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(px+0.25, py+0.25, pw-0.5, ph-0.5);
+    drawPlacementOpenings(ctx, p, scale, px, py, 0.5);
 
     // Part tag number, if it fits
+    const lb = placementLabelBox(p);
+    const lx = px + lb.x*scale, ly = py + lb.y*scale, lw = lb.w*scale, lh = lb.h*scale;
     const tag = String(p.tag!=null ? p.tag : partTagFor(p.defId));
-    const tagSize = Math.min(pw, ph) * 0.42;
+    const tagSize = Math.min(lw, lh) * 0.42;
     if (tagSize >= 6){
       ctx.fillStyle = 'rgba(20,16,24,0.85)';
       ctx.font = '700 ' + Math.min(tagSize, 13) + 'px Inter, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(tag, px+pw/2, py+ph/2);
+      ctx.fillText(tag, lx+lw/2, ly+lh/2);
     }
   });
 }
@@ -3032,7 +3708,7 @@ function buildSheetCard(bin, globalIndex){
   const view = plan.rotate ? rotatedBinView(bin) : bin;
   const card = document.createElement('div');
   card.className = 'sheet-card pg-' + plan.orient + (plan.include ? '' : ' pg-skip');
-  const eff = bin.w*bin.h>0 ? (100*bin.placements.reduce((s,p)=>s+p.w*p.h,0)/(bin.w*bin.h)) : 0;
+  const eff = bin.w*bin.h>0 ? (100*bin.placements.reduce((s,p)=>s+placedArea(p),0)/(bin.w*bin.h)) : 0;
 
   const head = document.createElement('div');
   head.className = 'sheet-card-head';
@@ -3157,6 +3833,7 @@ function drawSheet(canvas, bin, sheetNumber, eff){
     ctx.strokeStyle = 'rgba(40,40,50,0.75)';
     ctx.lineWidth = 1;
     ctx.strokeRect(px+0.5, py+0.5, pw-1, ph-1);
+    drawPlacementOpenings(ctx, p, scale, px, py, 1);
 
     const label = p.name;
     const tag = '#' + (p.tag!=null ? p.tag : partTagFor(p.defId));
@@ -3166,30 +3843,34 @@ function drawSheet(canvas, bin, sheetNumber, eff){
     const lh = (p.labelH!=null? p.labelH : p.h);
     const lr = (p.labelR!=null? p.labelR : p.rotated);
     const dims = (lr ? (lh.toFixed(2)+'" x '+lw.toFixed(2)+'" (R)') : (lw.toFixed(2)+'" x '+lh.toFixed(2)+'"'));
-    const fontSize = Math.max(9, Math.min(15, Math.min(pw,ph)*0.16));
+    // Labels go in the part's solid material; for a frame that is a rail,
+    // not the middle, where nested parts would sit on top of the text.
+    const lb = placementLabelBox(p);
+    const bx = px + lb.x*scale, by = py + lb.y*scale, bw = lb.w*scale, bh = lb.h*scale;
+    const fontSize = Math.max(9, Math.min(15, Math.min(bw,bh)*0.16));
     ctx.fillStyle = '#141018';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     ctx.font = '600 ' + fontSize + 'px Inter, sans-serif';
-    const fitsLabel = ctx.measureText(label).width < pw-6 && fontSize*2.4 < ph;
-    const fitsDims = ctx.measureText(dims).width < pw-6;
+    const fitsLabel = ctx.measureText(label).width < bw-6 && fontSize*2.4 < bh;
+    const fitsDims = ctx.measureText(dims).width < bw-6;
 
     if (fitsLabel){
       // Full label: "#N name" then dims underneath
-      ctx.fillText(tag + ' ' + label, px+pw/2, py+ph/2 - fontSize*0.6);
+      ctx.fillText(tag + ' ' + label, bx+bw/2, by+bh/2 - fontSize*0.6);
       ctx.font = fontSize*0.82 + 'px "IBM Plex Mono", monospace';
-      if (fitsDims) ctx.fillText(dims, px+pw/2, py+ph/2 + fontSize*0.7);
-    } else if (Math.min(pw,ph) > 26) {
+      if (fitsDims) ctx.fillText(dims, bx+bw/2, by+bh/2 + fontSize*0.7);
+    } else if (Math.min(bw,bh) > 26) {
       // Medium: dims only
       ctx.font = Math.max(8,fontSize*0.8) + 'px "IBM Plex Mono", monospace';
-      if (ctx.measureText(dims).width < pw-4) ctx.fillText(dims, px+pw/2, py+ph/2);
-      else { ctx.font = '700 ' + Math.min(fontSize*1.4, Math.min(pw,ph)*0.5) + 'px Inter, sans-serif'; ctx.fillText(tag, px+pw/2, py+ph/2); }
+      if (ctx.measureText(dims).width < bw-4) ctx.fillText(dims, bx+bw/2, by+bh/2);
+      else { ctx.font = '700 ' + Math.min(fontSize*1.4, Math.min(bw,bh)*0.5) + 'px Inter, sans-serif'; ctx.fillText(tag, bx+bw/2, by+bh/2); }
     } else {
       // Too small for anything but a tag number
-      const tagSize = Math.max(7, Math.min(Math.min(pw,ph)*0.5, 13));
+      const tagSize = Math.max(7, Math.min(Math.min(bw,bh)*0.5, 13));
       ctx.font = '700 ' + tagSize + 'px Inter, sans-serif';
-      ctx.fillText(tag, px+pw/2, py+ph/2);
+      ctx.fillText(tag, bx+bw/2, by+bh/2);
     }
   });
 
@@ -3541,6 +4222,9 @@ async function buildNestingPdf(mode){
     + included.length + ' of ' + bins.length + ' sheets   ·   proportional reference drawing, not to scale',
     PDF_TYPE.note, PDF_MUTED, 'mono');
 
+  const savingText = openingsSavingText(s, countNestedInOpenings(bins));
+  if (savingText) pdfParagraph(doc, ctx, savingText + ' Openings are drawn dashed.', PDF_TYPE.note, PDF_MUTED);
+
   if (s.unplaced.length){
     const grouped = {};
     s.unplaced.forEach(u => { grouped[u.defId] = (grouped[u.defId] || 0) + 1; });
@@ -3587,7 +4271,7 @@ async function buildNestingPdf(mode){
       bins.forEach(b => {
         const rec = byType[b.sheetType.id];
         rec.sheets += 1; rec.area += b.w * b.h;
-        rec.used += b.placements.reduce((a, p) => a + p.w * p.h, 0);
+        rec.used += b.placements.reduce((a, p) => a + placedArea(p), 0);
       });
       const cols = [
         { label: 'Material', key: 'mat', w: 3.4, wrap: true },
@@ -3631,7 +4315,7 @@ async function buildNestingPdf(mode){
         doc.addPage([paper.w, paper.h], land ? 'landscape' : 'portrait');
 
         const eff = bin.w * bin.h > 0
-          ? (100 * bin.placements.reduce((a, p) => a + p.w * p.h, 0) / (bin.w * bin.h)) : 0;
+          ? (100 * bin.placements.reduce((a, p) => a + placedArea(p), 0) / (bin.w * bin.h)) : 0;
 
         let hy = M;
         pdfText(doc, PDF_TYPE.sheetHead, 'display', PDF_INK);
@@ -3779,7 +4463,7 @@ async function buildNestingPdf(mode){
           const idx = bins.indexOf(bin);
           const cx = ctx.M + (k % cols) * (cellW + gap);
           const e = bin.w * bin.h > 0
-            ? (100 * bin.placements.reduce((a, p) => a + p.w * p.h, 0) / (bin.w * bin.h)) : 0;
+            ? (100 * bin.placements.reduce((a, p) => a + placedArea(p), 0) / (bin.w * bin.h)) : 0;
 
           pdfText(doc, PDF_TYPE.legendTd, 'bold', PDF_INK);
           doc.text('Sheet ' + (idx + 1), cx, cy + 0.16);
@@ -3928,7 +4612,16 @@ function sanitizeImportedPart(p, idx){
     name: (p.name!=null && String(p.name).trim()!=='') ? p.name : ('Part ' + (idx+1)),
     qty: Math.max(0, parseInt(p.qty)||0),
     rotate: p.rotate!=null ? !!p.rotate : true,
-  });
+  }, importedOpenings(p));
+}
+/* Openings only come in with the size they were measured at; without it
+   they could never be flagged stale, so they're dropped. */
+function importedOpenings(p){
+  const list = sanitizeOpenings(p.openings);
+  const b = p.openingsBase;
+  const bw = b ? Number(b.w) : NaN, bh = b ? Number(b.h) : NaN;
+  if (!list || !list.length || !isValidDims(bw, bh)) return { openings: undefined, openingsBase: undefined, useOpenings: undefined };
+  return { openings: list, openingsBase: { w: bw, h: bh }, useOpenings: !(p.useOpenings === false || p.useOpenings === 'false') };
 }
 function sanitizeImportedSheetType(st, idx){
   return Object.assign({}, st, {
