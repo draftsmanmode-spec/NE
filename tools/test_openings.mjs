@@ -584,6 +584,7 @@ const ex = await page.evaluate(async () => {
   sheetTypes = [{ id: nextId(), name: '32x22', width: 32, height: 22, qty: null, cost: 40 }];
   document.getElementById('fillOpenings').checked = true;
   document.getElementById('markupPct').value = '35';
+  reportPrefs.quoting = true; syncAudienceUI();
   document.getElementById('cutSpeed').value = '200'; document.getElementById('pierceSec').value = '1'; document.getElementById('laserRate').value = '120';
   saveWorkingIntoCurrentProject(); render(); runNesting();
   let s = strategyResults[selectedStrategyKey];
@@ -592,6 +593,10 @@ const ex = await page.evaluate(async () => {
   const c = jobCosts(s, s.bins);
   out.costs = { material: c.material, cutting: +c.cutting.toFixed(4), quote: +c.quote.toFixed(4), lines: c.lines, fmt: fmtMoney(c.quote) };
   out.quoteOnScreen = document.getElementById('reportBody').textContent.includes(fmtMoney(c.quote));
+  // Quoting tools off: no quote figure and no markup field on screen.
+  reportPrefs.quoting = false; syncAudienceUI(); rerenderResults();
+  out.quoteHiddenOff = !document.getElementById('reportBody').textContent.includes(fmtMoney(c.quote))
+    && document.getElementById('markupRow').style.display === 'none';
   tryHarder(0.25, 0.5, 2);
   await new Promise(r => setTimeout(r, 1500));
   s = strategyResults[selectedStrategyKey];
@@ -629,8 +634,8 @@ check(/No better layout/.test(ex.afterTry.note) && ex.afterTry.unplaced === 1, '
 const lc = l => Math.round(l * 100);
 const linesOk = ex.costs.lines.every(l => Math.abs(l.unit * l.qty - l.total) < 1e-9);
 const linesSum = ex.costs.lines.reduce((a, l) => a + lc(l.total), 0);
-check(ex.costs.material === 80 && ex.costs.cutting === 6.35 && linesOk && linesSum === lc(ex.costs.quote) && ex.costs.quote === 116.57 && ex.quoteOnScreen,
-  `customer quote = ($80 + $6.35) x 1.35 = ${ex.costs.fmt}, and its part lines add up to it exactly (${ex.costs.lines.map(l => l.qty + ' parts $' + l.total.toFixed(2)).join(' + ')})`);
+check(ex.costs.material === 80 && ex.costs.cutting === 6.35 && linesOk && linesSum === lc(ex.costs.quote) && ex.costs.quote === 116.57 && ex.quoteOnScreen && ex.quoteHiddenOff,
+  `customer quote = ($80 + $6.35) x 1.35 = ${ex.costs.fmt}, its part lines add up to it exactly, shown only with quoting tools on (${ex.costs.lines.map(l => l.qty + ' parts $' + l.total.toFixed(2)).join(' + ')})`);
 check(ex.costs.lines.every(l => ex.customer.text.includes(fmtMoneyNode(l.total))) && ex.customer.text.includes('Unit price'),
   'customer PDF prints every line total');
 check(has(ex.internal.text, 'Costs', 'Laser cutting', 'Markup 35%', 'Customer quote', ex.costs.fmt, 'EFFICIENCY', 'Monster'),
