@@ -392,7 +392,10 @@
   .sheet-card-head .name{ font-weight:600; font-size:16px; font-family:var(--display); }
   .sheet-card-head .meta{ font-size:13px; color:var(--text-dim); }
   .sheet-canvas-wrap{ padding:16px 18px; overflow-x:auto; }
-  canvas.sheet-canvas{ display:block; background:#ffffff; border-radius:8px; border:1px solid var(--line-soft); }
+  /* Drawn 920px wide; on a smaller screen it shrinks to fit (taps still map
+     to the right part, they are measured against the shown size). */
+  canvas.sheet-canvas{ display:block; background:#ffffff; border-radius:8px; border:1px solid var(--line-soft);
+    max-width:100%; height:auto !important; }
   .sheet-legend{ padding:0 18px 16px 18px; }
   .sheet-legend table{ width:100%; border-collapse:collapse; font-size:13px; }
   .sheet-legend th{ text-align:left; color:var(--text-faint); font-weight:500; font-size:12px; padding:2px 8px 4px 0; }
@@ -834,12 +837,13 @@
           <div class="row-actions">
             <button id="parseBulk">Add pasted rows</button>
           </div>
+          <div class="op-note" id="bulkNote" role="status" style="margin-top:8px;"></div>
         </div>
       </div>
 
       <details class="card" id="notesCard" style="margin-top:18px;">
         <summary>
-          Notes <span class="count">optional — customer info, reminders, anything worth keeping with this project</span>
+          Notes <span class="count">optional — printed at the top of the office and shop PDFs (lines with a $ stay off the shop copy)</span>
         </summary>
         <textarea id="projectNotes" placeholder="e.g. Customer: Acme Fab — wants clear anodized finish, needs by Friday, confirm grain direction on the brackets before cutting..." style="margin-top:12px; height:110px; font-size:12.5px;"></textarea>
       </details>
@@ -873,11 +877,11 @@
           <div class="settings-grid">
             <div>
               <label class="small">Part gap (in)<span class="hint" tabindex="0">?<span class="hint-bubble">The empty space kept between two parts on the sheet. This is your cutting allowance — set it to roughly your cut width plus a little safety margin so parts don't fuse together.</span></span></label>
-              <input type="number" id="partGap" step="0.0625" value="0.25">
+              <input type="number" id="partGap" step="0.0625" min="0" value="0.25">
             </div>
             <div>
               <label class="small">Sheet border gap (in)<span class="hint" tabindex="0">?<span class="hint-bubble">A clear margin kept around all four edges of every sheet. Keeps parts away from clamps, rollers, or the rough edge of the stock. 0.5" is a common default.</span></span></label>
-              <input type="number" id="borderGap" step="0.0625" value="0.5">
+              <input type="number" id="borderGap" step="0.0625" min="0" value="0.5">
             </div>
             <div class="checkline">
               <input type="checkbox" id="defaultRotate" checked>
@@ -1153,6 +1157,7 @@ function saveWorkingIntoCurrentProject(){
   proj.sheetTypes = sheetTypes;
   proj.parts = parts;
   proj.notes = document.getElementById('projectNotes').value;
+  proj.updatedAt = Date.now();
   proj.settings = {
     partGap: document.getElementById('partGap').value,
     borderGap: document.getElementById('borderGap').value,
@@ -1173,6 +1178,7 @@ function saveWorkingIntoCurrentProject(){
 function loadProjectIntoWorking(id){
   const proj = getProject(id);
   if (!proj) return;
+  forgetResults();
   sheetTypes = proj.sheetTypes || [];
   parts = proj.parts || [];
   document.getElementById('projectNotes').value = proj.notes || '';
@@ -1199,6 +1205,7 @@ function loadProjectIntoWorking(id){
    ===================================================================== */
 function showHome(){
   saveWorkingIntoCurrentProject();
+  forgetResults();
   currentProjectId = null;
   document.getElementById('homeView').style.display = '';
   document.getElementById('workspaceView').style.display = 'none';
@@ -1276,7 +1283,7 @@ function renderHome(){
     const sheetCount = (proj.sheetTypes||[]).length;
     const card = document.createElement('div');
     card.className = 'project-card';
-    const dateStr = new Date(proj.createdAt||Date.now()).toLocaleDateString();
+    const dateStr = new Date(proj.updatedAt||proj.createdAt||Date.now()).toLocaleDateString();
     card.innerHTML = `
       <div class="card-actions">
         <button class="ghost small" title="Rename" data-act="rename">&#9998;</button>
@@ -1285,7 +1292,7 @@ function renderHome(){
       </div>
       <div class="pname">${escHtml(proj.name)}</div>
       <div class="pmeta">${partCount} parts &middot; ${sheetCount} sheet type${sheetCount===1?'':'s'}</div>
-      <div class="pdate">Created ${dateStr}</div>
+      <div class="pdate">${proj.updatedAt ? 'Last worked on' : 'Created'} ${dateStr}</div>
       <div class="open-row"><button class="primary small">Open &rarr;</button></div>
     `;
     card.addEventListener('click', ()=> openProject(proj.id));
@@ -1347,8 +1354,9 @@ function render(){
   renderSheetTypes();
   renderParts();
   document.getElementById('sheetCount').textContent = sheetTypes.length;
-  document.getElementById('partCount').textContent = parts.reduce((s,p)=>s+(Number(p.qty)||0),0) + ' pcs';
+  updatePartCount();
   refreshCalcSheetOptions();
+  updateCalc();
 }
 
 function renderSheetTypes(){
@@ -1362,8 +1370,8 @@ function renderSheetTypes(){
       <td><input type="text" value="${escAttr(st.name)}" data-f="name"></td>
       <td class="col-w"><input type="number" step="0.0625" value="${st.width}" data-f="width" class="${dimsBad?'input-invalid':''}" title="${dimsBad?'Width must be greater than 0':''}"></td>
       <td class="col-h"><input type="number" step="0.0625" value="${st.height}" data-f="height" class="${dimsBad?'input-invalid':''}" title="${dimsBad?'Height must be greater than 0':''}"></td>
-      <td class="col-q"><input type="number" step="1" placeholder="&infin;" value="${st.qty==null?'':st.qty}" data-f="qty"></td>
-      <td class="col-w"><input type="number" step="0.01" placeholder="-" value="${st.cost==null?'':st.cost}" data-f="cost"></td>
+      <td class="col-q"><input type="number" step="1" min="0" placeholder="&infin;" value="${st.qty==null?'':st.qty}" data-f="qty"></td>
+      <td class="col-w"><input type="number" step="0.01" min="0" placeholder="-" value="${st.cost==null?'':st.cost}" data-f="cost"></td>
       <td class="col-del"><button class="ghost danger small" data-del="1" title="Remove">&times;</button></td>
     `;
     tr.querySelectorAll('input').forEach(inp=>{
@@ -1371,7 +1379,7 @@ function renderSheetTypes(){
         const f = inp.dataset.f;
         if (f==='name') st[f] = inp.value;
         else if (f==='qty') st[f] = inp.value===''? null : Math.max(0, parseInt(inp.value)||0);
-        else if (f==='cost') st[f] = inp.value===''? null : parseFloat(inp.value);
+        else if (f==='cost'){ const v = parseFloat(inp.value); st[f] = (inp.value==='' || !(v >= 0)) ? null : v; markInvalid(inp, v < 0); }
         else st[f] = parseFloat(inp.value)||0;
         if (f==='width' || f==='height'){
           const bad = !isValidDims(st.width, st.height);
@@ -1379,6 +1387,12 @@ function renderSheetTypes(){
           tr.querySelector('[data-f="height"]').classList.toggle('input-invalid', bad);
         }
         persistAll();
+      });
+      // Leaving a box shows what was actually kept (e.g. qty -3 -> 0).
+      inp.addEventListener('change', ()=>{
+        const f = inp.dataset.f;
+        if (f==='qty') inp.value = st.qty==null ? '' : st.qty;
+        if (f==='cost' && st.cost==null && inp.value !== ''){ inp.value = ''; markInvalid(inp, false); }
       });
     });
     tr.querySelector('[data-del]').addEventListener('click', ()=>{
@@ -1390,6 +1404,11 @@ function renderSheetTypes(){
   });
 }
 
+// Part gap / border gap: never negative (a negative gap would overlap parts).
+function gapValue(id){ return Math.max(0, parseFloat(document.getElementById(id).value) || 0); }
+function updatePartCount(){
+  document.getElementById('partCount').textContent = parts.reduce((s,p)=>s+(Number(p.qty)||0),0) + ' pcs';
+}
 function isValidDims(w,h){ return typeof w==='number' && typeof h==='number' && w>0 && h>0 && isFinite(w) && isFinite(h); }
 function markInvalid(inp, invalid){ inp.classList.toggle('input-invalid', !!invalid); }
 
@@ -1406,7 +1425,7 @@ function renderParts(){
       <td><input type="text" value="${escAttr(p.name)}" data-f="name"></td>
       <td class="col-w"><input type="number" step="0.0625" value="${p.width}" data-f="width" class="${dimsBad?'input-invalid':''}" title="${dimsBad?'Width must be greater than 0':''}"></td>
       <td class="col-h"><input type="number" step="0.0625" value="${p.height}" data-f="height" class="${dimsBad?'input-invalid':''}" title="${dimsBad?'Height must be greater than 0':''}"></td>
-      <td class="col-q"><input type="number" step="1" value="${p.qty}" data-f="qty"></td>
+      <td class="col-q"><input type="number" step="1" min="0" value="${p.qty}" data-f="qty"></td>
       <td style="text-align:center;"><input type="checkbox" ${p.rotate?'checked':''} data-f="rotate"></td>
       <td class="col-fill" data-fill-cell>${fillCellHtml(p, true)}</td>
       <td class="col-swatch"><input type="color" value="${p.color}" data-f="color"></td>
@@ -1433,8 +1452,10 @@ function renderParts(){
           tr.querySelector('[data-f="height"]').classList.toggle('input-invalid', bad);
           fillTd.innerHTML = fillCellHtml(p, true);
         }
+        if (f==='qty') updatePartCount();
         persistAll();
       });
+      if (inp.dataset.f==='qty') inp.addEventListener('change', ()=>{ inp.value = p.qty; });
     });
     tr.querySelector('[data-del]').addEventListener('click', ()=>{
       parts = parts.filter(x=>x.id!==p.id);
@@ -1466,20 +1487,24 @@ document.getElementById('parseBulk').addEventListener('click', ()=>{
   const raw = document.getElementById('bulkPaste').value.trim();
   if (!raw) return;
   const rot = document.getElementById('defaultRotate').checked;
+  const skipped = [];
+  let added = 0;
   raw.split('\n').forEach(line=>{
     if (!line.trim()) return;
     const cells = line.split(/[,\t]/).map(c=>c.trim());
-    if (cells.length < 3) return;
     const [name, w, h, q, rail] = cells;
+    const width = parseLength(w), height = parseLength(h);
+    // Qty: blank means 1; otherwise a whole number, 0 allowed (kept, not cut).
+    const qty = (q===undefined || q==='') ? 1 : (/^\d+$/.test(q) ? parseInt(q, 10) : NaN);
+    if (cells.length < 3 || !isValidDims(width, height) || isNaN(qty)){ skipped.push(line.trim()); return; }
     const part = {
       id: nextId(),
       name: name || ('Part '+(parts.length+1)),
-      width: parseFloat(w)||0,
-      height: parseFloat(h)||0,
-      qty: q!==undefined && q!=='' ? Math.max(1, parseInt(q)||1) : 1,
+      width, height, qty,
       rotate: rot,
       color: null
     };
+    added++;
     // Only an explicit "rail 1.5" (or "frame 1.5") makes a frame, so an extra
     // numeric column from a spreadsheet (thickness, price) is never misread.
     const railMatch = /^(?:rail|frame)\s*[:=]?\s*(\d*\.?\d+)\s*(?:"|in)?$/i.exec(rail || '');
@@ -1487,10 +1512,24 @@ document.getElementById('parseBulk').addEventListener('click', ()=>{
     if (frame) setPartOpenings(part, [frame]);
     parts.push(part);
   });
-  document.getElementById('bulkPaste').value = '';
+  // Lines that could not be read stay in the box, with the reason.
+  document.getElementById('bulkPaste').value = skipped.join('\n');
+  const note = document.getElementById('bulkNote');
+  note.textContent = (added ? 'Added ' + added + ' part' + (added===1?'':'s') + '. ' : '')
+    + (skipped.length ? skipped.length + ' line' + (skipped.length===1?' was':'s were') + ' not added and ' + (skipped.length===1?'is':'are') + ' still in the box: each line needs a name, a width and a height above 0 (like 10.5 or 10 1/2) and, optionally, a whole-number qty.' : '');
+  note.classList.toggle('op-error', !!skipped.length);
   saveWorkingIntoCurrentProject();
   render();
 });
+/* A length typed by hand: 10.5, 10 1/2, 10-1/2, 1/2, with or without ". */
+function parseLength(str){
+  const t = String(str==null?'':str).trim().replace(/(?:"|in|inch|inches)$/i, '').trim();
+  let m;
+  if ((m = /^(\d+(?:\.\d+)?)$/.exec(t)) || (m = /^(\.\d+)$/.exec(t))) return parseFloat(m[1]);
+  if ((m = /^(\d+)[\s-]+(\d+)\/(\d+)$/.exec(t)) && +m[3] > 0) return +m[1] + m[2] / m[3];
+  if ((m = /^(\d+)\/(\d+)$/.exec(t)) && +m[2] > 0) return m[1] / m[2];
+  return NaN;
+}
 
 /* =====================================================================
    QUALITY SLIDER
@@ -1504,13 +1543,17 @@ const qualitySlider = document.getElementById('qualitySlider');
 function updateQualityNote(){ document.getElementById('qualityNote').textContent = qualityNotes[qualitySlider.value]; }
 qualitySlider.addEventListener('input', ()=>{ updateQualityNote(); saveWorkingIntoCurrentProject(); });
 updateQualityNote();
-document.getElementById('partGap').addEventListener('input', saveWorkingIntoCurrentProject);
-document.getElementById('borderGap').addEventListener('input', saveWorkingIntoCurrentProject);
+['partGap','borderGap'].forEach(id=>{
+  const el = document.getElementById(id);
+  el.addEventListener('input', ()=>{ markInvalid(el, parseFloat(el.value) < 0); saveWorkingIntoCurrentProject(); });
+  // A negative gap is used as 0, so the box says 0 once you leave it.
+  el.addEventListener('change', ()=>{ if (parseFloat(el.value) < 0){ el.value = 0; markInvalid(el, false); saveWorkingIntoCurrentProject(); } });
+});
 document.getElementById('defaultRotate').addEventListener('input', saveWorkingIntoCurrentProject);
 document.getElementById('fillOpenings').addEventListener('input', saveWorkingIntoCurrentProject);
 ['markupPct','cutSpeed','pierceSec','laserRate'].forEach(id=> document.getElementById(id).addEventListener('input', ()=>{
   saveWorkingIntoCurrentProject();
-  if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
+  refreshReportIfShown();
 }));
 document.getElementById('projectNotes').addEventListener('input', saveWorkingIntoCurrentProject);
 
@@ -1592,7 +1635,11 @@ function refreshCalcSheetOptions(){
   const prev = sel.value;
   sel.innerHTML = sheetTypes.map(st=>`<option value="${st.id}">${escHtml(st.name)} (${st.width}"&times;${st.height}")</option>`).join('')
     + '<option value="__custom">Custom size&hellip;</option>';
-  if (sheetTypes.some(st=>st.id===prev) || prev==='__custom') sel.value = prev;
+  // "Custom size" only sticks if it was really chosen (sizes typed in);
+  // a project that simply had no sheets yet moves to its first sheet.
+  const customTyped = document.getElementById('calcCustomW').value !== '' || document.getElementById('calcCustomH').value !== '';
+  if (sheetTypes.some(st=>st.id===prev) || (prev==='__custom' && (customTyped || !sheetTypes.length))) sel.value = prev;
+  else if (sheetTypes.length) sel.value = sheetTypes[0].id;
   document.getElementById('calcCustomSizeRow').style.display = sel.value==='__custom' ? 'flex' : 'none';
 }
 /* =====================================================================
@@ -1727,14 +1774,14 @@ document.getElementById('calcMaterial').addEventListener('change', ()=>{
   refreshCalcThicknessOptions();
   document.getElementById('calcPricePerLb').value = '';
   document.getElementById('calcPriceSource').value = '';
+  checkPriceBook();   // may fill the price from the price book first
   updateCalc();
-  checkPriceBook();
 });
 document.getElementById('calcThickness').addEventListener('change', ()=>{
   document.getElementById('calcPricePerLb').value = '';
   document.getElementById('calcPriceSource').value = '';
+  checkPriceBook();   // may fill the price from the price book first
   updateCalc();
-  checkPriceBook();
 });
 document.getElementById('calcPricePerLb').addEventListener('input', updateCalc);
 document.getElementById('calcPricePerLb').addEventListener('change', rememberCurrentPrice);
@@ -1761,6 +1808,7 @@ document.getElementById('calcApplyBtn').addEventListener('click', ()=>{
 });
 initCalcMaterialOptions();
 checkPriceBook();
+updateCalc();
 
 /* =====================================================================
    DXF IMPORT
@@ -2418,12 +2466,13 @@ function fmtMoney(v){ return '$' + v.toLocaleString('en-US', { minimumFractionDi
 function oversizedHtml(){
   if (!oversizedParts.length) return '';
   const run = lastRunParams || {};
-  const pg = run.partGap != null ? run.partGap : (parseFloat(document.getElementById('partGap').value) || 0);
-  const bg = run.borderGap != null ? run.borderGap : (parseFloat(document.getElementById('borderGap').value) || 0);
+  const pg = run.partGap != null ? run.partGap : gapValue('partGap');
+  const bg = run.borderGap != null ? run.borderGap : gapValue('borderGap');
   const list = oversizedParts.map(p=> `${escHtml(p.name)} (${p.width}" &times; ${p.height}") &times; ${p.qty}`).join(', ');
   const limits = sheetTypes.filter(st=> isValidDims(st.width, st.height))
     .map(st=> `${escHtml(st.name)} up to ${(st.width - 2*bg - pg).toFixed(2)}" &times; ${(st.height - 2*bg - pg).toFixed(2)}"`).join('; ');
-  return `Too big for every sheet: ${list}.` + (limits ? ` After the border and part gaps the sheets hold parts ${limits}.` : '') + ' Everything else was nested.';
+  const others = parts.some(p=> !oversizedParts.includes(p) && p.qty > 0 && isValidDims(p.width, p.height));
+  return `Too big for every sheet: ${list}.` + (limits ? ` After the border and part gaps the sheets hold parts ${limits}.` : '') + (others ? ' The other parts are nested as usual.' : '');
 }
 function fmtMinutes(m){
   if (m < 60) return m.toFixed(1) + ' min';
@@ -2500,6 +2549,7 @@ let dxfRowSeq = 0;
 function dxfOpenModal(){
   dxfReviewRows = [];
   dxfRowSeq = 0;
+  dxfFailedFiles = [];
   document.getElementById('dxfDiagnostics').innerHTML = '';
   renderDxfReviewTable();
   document.getElementById('dxfModal').classList.add('open');
@@ -2650,6 +2700,7 @@ function renderDxfReviewTable(){
           tr.classList.toggle('dxf-row-bad', !(row.w>0 && row.h>0));
           fillTd.innerHTML = fillCellHtml(dxfRowAsPart(row));
         }
+        if (f==='qty' && inp.dataset.normBound !== '1'){ inp.dataset.normBound = '1'; inp.addEventListener('change', ()=>{ inp.value = row.qty; }); }
         document.getElementById('dxfAddBtn').textContent = `Add ${dxfReviewRows.reduce((s,r)=>s+r.qty,0)} part${dxfReviewRows.reduce((s,r)=>s+r.qty,0)===1?'':'s'} to parts list`;
       });
     });
@@ -2776,14 +2827,25 @@ function refreshOpeningsCheck(){
 document.getElementById('opMakeFrame').addEventListener('click', () => {
   const rail = parseFloat(document.getElementById('opRail').value);
   const f = frameOpening(opEdit.part.width, opEdit.part.height, rail);
-  if (!f){ document.getElementById('opError').textContent = 'Rails that wide leave no opening in this part.'; return; }
+  if (!f){ document.getElementById('opError').textContent = 'Rails that wide leave no opening in this part.'; document.getElementById('opSaveBtn').disabled = true; return; }
   opEdit.rows = [f];
   renderOpeningsEditor();
 });
 document.getElementById('opAddRow').addEventListener('click', () => {
-  const { part } = opEdit;
-  const w = +(part.width / 3).toFixed(4), h = +(part.height / 3).toFixed(4);
-  opEdit.rows.push({ x: +((part.width - w) / 2).toFixed(4), y: +((part.height - h) / 2).toFixed(4), w, h });
+  const { part } = opEdit, W = part.width, H = part.height;
+  // Put the new opening somewhere free, so it starts out valid: try a few
+  // sizes on a grid and take the first spot that clashes with nothing.
+  let pick = null;
+  for (const f of [3, 4, 6, 10]){
+    const w = +(W / f).toFixed(4), h = +(H / f).toFixed(4);
+    for (let j = 1; j < 12 && !pick; j++) for (let i = 1; i < 12 && !pick; i++){
+      const c = { x: +((W - w) * i / 12).toFixed(4), y: +((H - h) * j / 12).toFixed(4), w, h };
+      if (!validateOpenings(opEdit.rows.concat([c]), W, H)) pick = c;
+    }
+    if (pick) break;
+  }
+  if (!pick){ const w = +(W / 3).toFixed(4), h = +(H / 3).toFixed(4); pick = { x: +((W - w) / 2).toFixed(4), y: +((H - h) / 2).toFixed(4), w, h }; }
+  opEdit.rows.push(pick);
   renderOpeningsEditor();
 });
 document.getElementById('opSaveBtn').addEventListener('click', () => {
@@ -3335,6 +3397,18 @@ function findRemnants(bins, minDim){
 let strategyResults = {};
 let selectedStrategyKey = null;
 let lastRunParams = null; // { partGap, borderGap, quality } from the most recent runNesting(), so toggling a report section can re-render without recomputing the nest
+// Redraw the report after a display-only change. Results are dropped on a
+// project switch, Clear and Home (forgetResults), so this never draws one
+// project's numbers in another; Results re-nests whenever you come back to it.
+function refreshReportIfShown(){
+  if (lastRunParams && currentProjectId) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
+}
+// Drop every computed result: project switch, Clear, example data, Home.
+function forgetResults(){
+  if (layoutSel) layoutSelect(null, null);
+  lastRunParams = null; strategyResults = {}; strategyOrder = []; lastNestResult = null;
+  const r = document.getElementById('results'); if (r) r.innerHTML = '';
+}
 let lastInvalidNote = '';
 
 /* =====================================================================
@@ -3360,7 +3434,9 @@ function currentPaper(){
   const key = (reportPrefs.paper||'tabloid');
   if (key === 'custom'){
     const a = parseFloat(reportPrefs.customW)||11, b = parseFloat(reportPrefs.customH)||17;
-    const w = Math.max(1, Math.min(a,b)), h = Math.max(1, Math.max(a,b));
+    // 5" to 60" a side: smaller pages can't hold a heading and a table.
+    const clampIn = v => Math.min(60, Math.max(5, v));
+    const w = clampIn(Math.min(a,b)), h = clampIn(Math.max(a,b));
     return { key, label:'Custom '+w+'x'+h, w, h };
   }
   const p = PAPER_SIZES[key] || PAPER_SIZES.tabloid;
@@ -3599,13 +3675,13 @@ function saveReportPrefsFromUI(){
     paper: document.getElementById('paperSize').value,
     audience: document.getElementById('exportAudience').value,
     quoting: document.getElementById('secQuoting').checked,
-    customW: parseFloat(document.getElementById('paperCustomW').value) || 11,
-    customH: parseFloat(document.getElementById('paperCustomH').value) || 17,
+    customW: Math.min(60, Math.max(5, parseFloat(document.getElementById('paperCustomW').value) || 11)),
+    customH: Math.min(60, Math.max(5, parseFloat(document.getElementById('paperCustomH').value) || 17)),
   });
   storeReportPrefs();
   syncAudienceUI();
   syncPaperUI();
-  if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
+  refreshReportIfShown();
 }
 ['secParts','secBreakdown','secCommonLines','secRemnants','secSheets','secQuoting',
  'paperSize','paperCustomW','paperCustomH','exportAudience'].forEach(id=>{
@@ -3765,8 +3841,8 @@ function buildStrategyCompareTable(sortedKeys){
 }
 
 function runNesting(){
-  const partGap = parseFloat(document.getElementById('partGap').value)||0;
-  const borderGap = parseFloat(document.getElementById('borderGap').value)||0;
+  const partGap = gapValue('partGap');
+  const borderGap = gapValue('borderGap');
   const quality = parseInt(qualitySlider.value);
 
   const results = document.getElementById('results');
@@ -3800,7 +3876,9 @@ function runNesting(){
       : '<div class="warning-box"><b>None of your sheet sizes can hold every part.</b> Add a bigger sheet type, or check whether a part\'s dimensions are larger than any sheet you\'ve defined.</div>');
     return;
   }
-  selectedStrategyKey = sortedKeys[0];
+  // A strategy picked by hand ("Use this") stays picked on the next run.
+  const picked = (getProject(currentProjectId) || {}).pickedStrategy;
+  selectedStrategyKey = picked && strategyResults[picked] ? picked : sortedKeys[0];
   strategyOrder = sortedKeys;
   lastRunParams = { partGap, borderGap, quality, fillOpenings };
   // Every strategy keeps a copy of its computed layout: Reset and switching
@@ -3910,7 +3988,7 @@ function renderReportBody(partGap, borderGap, quality){
   bins.forEach(b=>{
     const area = b.w*b.h;
     const used = b.placements.reduce((s2,p)=>s2+placedArea(p),0);
-    const rec = byType[b.sheetType.id];
+    const rec = byType[b.sheetType.id] || (byType[b.sheetType.id] = { st: b.sheetType, sheets:0, area:0, used:0 });
     rec.sheets += 1; rec.area += area; rec.used += used;
   });
 
@@ -3967,7 +4045,8 @@ function renderReportBody(partGap, borderGap, quality){
     : s.efficiency>=65 ? 'in the typical range for real-world sheet nesting (roughly 65&ndash;75%)'
     : s.efficiency>=45 ? 'below typical (65&ndash;75% is common) — worth trying "Try harder" or a different strategy above'
     : 'well below typical — check part sizes against sheet size, or try a different strategy above';
-  html += `<div class="gap-note" style="margin-top:-14px;">Efficiency context: this result is <span>${effBand}</span>.</div>`;
+  if (bins.length) html += `<div class="gap-note" style="margin-top:-14px;">Efficiency context: this result is <span>${effBand}</span>.</div>`;
+  else html += `<div class="warning-box"><b>Nothing could go on a sheet.</b> Every sheet type is at quantity 0 or too small. Set a sheet quantity (blank = unlimited) in step 2 (Nest).</div>`;
 
   if (oversizedParts.length) html += `<div class="warning-box" id="oversizedNote"><b>Not nested &mdash; too big for any sheet.</b> ${oversizedHtml()}</div>`;
   const stockOut = unplaced.filter(u=> !(s.tooBig || []).includes(u) && !u.takenOff);
@@ -3978,7 +4057,7 @@ function renderReportBody(partGap, borderGap, quality){
       const p = parts.find(x=>x.id===defId);
       return escHtml(p? p.name : 'Unknown') + ' &times; ' + count;
     }).join(', ');
-    html += `<div class="warning-box"><b>${stockOut.length} part(s) could not be placed</b> &mdash; sheet stock ran out for: ${lines}. Edit the sheet quantity below, or try a different strategy above, and re-run.</div>`;
+    html += `<div class="warning-box"><b>${stockOut.length} part(s) could not be placed</b> &mdash; sheet stock ran out for: ${lines}. Raise the sheet quantity in step 2 (Nest), or try a different strategy above.</div>`;
   }
   const sr = s.search;
   if (sr && sr.planned && sr.tried < sr.planned){
@@ -4211,6 +4290,8 @@ function switchStrategy(key){
     clearEditedLayout();
   }
   selectedStrategyKey = key;
+  const proj = getProject(currentProjectId);
+  if (proj){ proj.pickedStrategy = key === strategyOrder[0] ? undefined : key; persistAll(); }
   layoutSel = null; layoutUndo = [];
   rerenderResults();
 }
@@ -4260,7 +4341,7 @@ function layoutTakeOff(binIdx, pl){
     from.placements = from.placements.filter(p=> p !== pl);
     const u = unitOf(pl); u.takenOff = true;
     st.unplaced = st.unplaced.concat([u]);
-    return { ok: ()=> plTag(pl) + ' ' + pl.name + ' taken off. It is in "Not on a sheet" below the summary.' };
+    return { ok: ()=> plTag(pl) + ' ' + pl.name + ' taken off. It is in "Not on a sheet" at the top of this page.' };
   });
 }
 // Put parts that are off the sheets back on: into room on an existing sheet
@@ -4299,8 +4380,10 @@ function layoutTidy(binIdx){
     if (!b) return { error: 'No such sheet.' };
     const re = repackOneSheet(b.sheetType, b.placements.map(unitOf), editParams());
     if (!re) return { error: 'Sheet ' + (binIdx + 1) + ' could not be re-packed any other way.' };
+    const key = list => list.map(p=> [p.x, p.y, p.w, p.h].join(',')).sort().join(';');
+    const same = key(re) === key(b.placements);
     b.placements = re;
-    return { ok: ()=> 'Sheet ' + (binIdx + 1) + ' re-packed.' };
+    return { ok: ()=> same ? 'Sheet ' + (binIdx + 1) + ' is already as tidy as it gets - nothing moved.' : 'Sheet ' + (binIdx + 1) + ' re-packed.' };
   });
 }
 function layoutUndoLast(){
@@ -4478,7 +4561,7 @@ function renderExportDialog(){
     const why = summaryOff ? 'Needs the summary page' : '';
     h += `<div class="ex-sec"><h4>3. What to include</h4><div class="ex-opts">
       ${tog('summary', 'Summary page', 'Sheets, parts, notes on page 1')}
-      ${tog('notes', 'Job notes', why || 'Material to pull, cut order, warnings', summaryOff)}
+      ${tog('notes', 'Job notes', why || 'Your project notes, material to pull, cut order, warnings', summaryOff)}
       ${!isOv ? tog('pdfParts', 'Parts list', why || 'Every part with its tag', summaryOff) : ''}
       ${isInt ? tog('pdfBreakdown', 'Material breakdown', why || 'Sheets and use per material', summaryOff) : ''}
       ${!isOv ? tog('pdfRemnants', 'Leftover pieces', why || 'Offcuts worth keeping', summaryOff) : ''}
@@ -4543,9 +4626,12 @@ function renderExportDialog(){
   if (paper) paper.addEventListener('change', ()=>{ P.paper = paper.value; changed(); });
   ['exCustomW', 'exCustomH'].forEach(id=>{
     const el = document.getElementById(id);
-    if (el) el.addEventListener('change', ()=>{ const v = parseFloat(el.value); if (v > 0){ P[id === 'exCustomW' ? 'customW' : 'customH'] = v; } changed(); });
+    if (el) el.addEventListener('change', ()=>{ const v = parseFloat(el.value); if (v > 0){ P[id === 'exCustomW' ? 'customW' : 'customH'] = Math.min(60, Math.max(5, v)); } changed(); });
   });
   document.getElementById('exName').addEventListener('input', e=>{ exportFileName = e.target.value; });
+  document.getElementById('exName').addEventListener('keydown', e=>{
+    if (e.key === 'Enter' && !document.getElementById('exSave').disabled){ e.preventDefault(); saveFromExportDialog(); }
+  });
 }
 async function saveFromExportDialog(){
   const P = reportPrefs, btn = document.getElementById('exSave');
@@ -4696,7 +4782,7 @@ function buildPreviewSheetList(bins){
 function refreshPreview(){
   if (!lastNestResult || !lastNestResult.bins.length) return;
   buildOverviewContent(lastNestResult.bins, 'previewModalBody'); // the preview IS the export source now
-  if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
+  refreshReportIfShown();
   preparePrint();
 }
 
@@ -4719,6 +4805,18 @@ document.getElementById('previewPrintReportBtn').addEventListener('click', ()=>{
 document.getElementById('previewCloseBtn').addEventListener('click', ()=>{
   document.getElementById('previewModal').classList.remove('open');
 });
+document.getElementById('previewModal').addEventListener('click', e=>{
+  if (e.target.id === 'previewModal') document.getElementById('previewModal').classList.remove('open');
+});
+// Esc closes whichever window is open (Export has its own handler).
+document.addEventListener('keydown', e=>{
+  if (e.key !== 'Escape') return;
+  const open = id => document.getElementById(id).classList.contains('open');
+  if (open('exportModal')) return;
+  if (open('openingsModal')) closeOpeningsEditor();
+  else if (open('dxfModal')) document.getElementById('dxfModal').classList.remove('open');
+  else if (open('previewModal')) document.getElementById('previewModal').classList.remove('open');
+});
 document.getElementById('previewPrintBtn').addEventListener('click', ()=>{ document.getElementById('previewModal').classList.remove('open'); openExportDialog('overview'); });
 
 function buildOverviewContent(bins, containerId){
@@ -4726,8 +4824,8 @@ function buildOverviewContent(bins, containerId){
   container.innerHTML = '';
   const proj = getProject(currentProjectId);
 
-  const partGap = parseFloat(document.getElementById('partGap').value)||0;
-  const borderGap = parseFloat(document.getElementById('borderGap').value)||0;
+  const partGap = gapValue('partGap');
+  const borderGap = gapValue('borderGap');
 
   const usage = {};
   let totalSheetArea=0, totalUsedArea=0, totalCost=0, anyCost=false;
@@ -5248,6 +5346,21 @@ function pdfText(doc, size, kind, rgb){
 
 const pdfLine = pt => pt / 72 * 1.32;   // point size -> line height in inches
 
+/* Free text typed by the user (project notes) may hold characters the PDF
+   font subset doesn't have: accents are dropped, anything else becomes '?'. */
+const PDF_EXTRA_CHARS = '°·×²½¼¾–—‘’“”•…✓';
+function pdfPlain(str){
+  return String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\t/g, ' ').split('').map(ch => (ch >= ' ' && ch <= '~') || PDF_EXTRA_CHARS.includes(ch) ? ch : '?').join('');
+}
+// The project's own Notes (step 1), one bullet per non-empty line. The shop
+// PDF never prints a price, so lines with a $ stay off it.
+function projectNoteBullets(forShop){
+  const el = document.getElementById('projectNotes');
+  return String(el ? el.value : '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !(forShop && l.includes('$'))).slice(0, 30)
+    .map(l => ({ text: pdfPlain(l.length > 600 ? l.slice(0, 600) + '…' : l) }));
+}
+
 /* Render one sheet to PNG at export resolution. targetWidthIn is how wide the
    image will actually sit on the page, so the DPI is real rather than nominal. */
 function renderSheetPng(bin, plan, sheetNumber, eff, targetWidthIn, thumb){
@@ -5656,6 +5769,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
       if (cl.count) notes.push({ text: cl.count + ' common-line cut' + (cl.count === 1 ? '' : 's') + ' possible (~' + cl.totalLength.toFixed(0) + '" of shared edge).' });
     }
   }
+  if (!isCust) notes.unshift(...projectNoteBullets(isShop));
   if (!isCust && bins.length) notes.push({ text: 'Drawings are proportional references, not to scale - take dimensions from the parts list, not the drawing.', rgb: PDF_MUTED });
   if (S && X.notes !== false && notes.length && !isCust){
     pdfSectionTitle(doc, ctx, 'Notes for this job');
@@ -6131,17 +6245,21 @@ async function exportPdf(mode, btn, fileBase){
    HEADER ACTIONS: sample / clear / save / export / import / new / rename
    ===================================================================== */
 document.getElementById('btnSample').addEventListener('click', ()=>{
+  if ((parts.length || sheetTypes.length) && !confirm('Replace the parts and sheets in this project with the example?')) return;
   const d = sampleData();
   sheetTypes = d.sheetTypes; parts = d.parts;
   saveWorkingIntoCurrentProject();
+  forgetResults();
   render();
+  if (currentStep === 3) goToStep(3);
 });
 document.getElementById('btnClear').addEventListener('click', ()=>{
   if (!confirm('Clear all sheets and parts in this project?')) return;
   sheetTypes = []; parts = [];
   saveWorkingIntoCurrentProject();
-  document.getElementById('results').innerHTML = '';
+  forgetResults();
   render();
+  if (currentStep === 3) goToStep(3);
 });
 document.getElementById('saveProject').addEventListener('click', ()=>{
   saveWorkingIntoCurrentProject();
@@ -6158,6 +6276,7 @@ document.getElementById('btnExport').addEventListener('click', ()=>{
   const proj = getProject(currentProjectId);
   const payload = JSON.stringify({
     name: proj.name, sheetTypes: proj.sheetTypes, parts: proj.parts, settings: proj.settings,
+    notes: proj.notes || undefined,
     editedLayout: proj.editedLayout || undefined
   }, null, 2);
   const blob = new Blob([payload], {type:'application/json'});
@@ -6168,9 +6287,12 @@ document.getElementById('btnExport').addEventListener('click', ()=>{
   URL.revokeObjectURL(url);
 });
 document.getElementById('btnImport').addEventListener('click', ()=> document.getElementById('importFile').click());
+// "12" in a hand-edited file means 12.
+function importNum(v){ return (typeof v === 'string' && v.trim() !== '' && isFinite(Number(v))) ? Number(v) : v; }
 function sanitizeImportedPart(p, idx){
   return Object.assign({}, p, {
     id: p.id || nextId(),
+    width: importNum(p.width), height: importNum(p.height),
     name: (p.name!=null && String(p.name).trim()!=='') ? p.name : ('Part ' + (idx+1)),
     qty: Math.max(0, parseInt(p.qty)||0),
     rotate: p.rotate!=null ? !!p.rotate : true,
@@ -6188,6 +6310,7 @@ function importedOpenings(p){
 function sanitizeImportedSheetType(st, idx){
   return Object.assign({}, st, {
     id: st.id || nextId(),
+    width: importNum(st.width), height: importNum(st.height),
     name: (st.name!=null && String(st.name).trim()!=='') ? st.name : ('Sheet ' + (idx+1)),
     qty: (st.qty===null || st.qty===undefined || st.qty==='') ? null : Math.max(0, parseInt(st.qty)||0),
     cost: (st.cost===null || st.cost===undefined || st.cost==='' || isNaN(parseFloat(st.cost))) ? null : parseFloat(st.cost),
@@ -6200,7 +6323,17 @@ document.getElementById('importFile').addEventListener('change', (e)=>{
   const reader = new FileReader();
   reader.onload = ()=>{
     try{
-      const data = JSON.parse(reader.result);
+      let data;
+      try { data = JSON.parse(reader.result); }
+      catch(e){ alert('That file is not a project file (it is not valid JSON).'); return; }
+      const listOk = v => v == null || Array.isArray(v);
+      const projOk = d => d && typeof d === 'object' && !Array.isArray(d) && listOk(d.sheetTypes) && listOk(d.parts)
+        && (Array.isArray(d.sheetTypes) || Array.isArray(d.parts));
+      if (!data || typeof data !== 'object' || Array.isArray(data)
+          || (Array.isArray(data.projects) ? !data.projects.every(projOk) : !projOk(data))){
+        alert('That file is not a Nesting Estimator project or backup. Nothing was imported.');
+        return;
+      }
 
       if (Array.isArray(data.projects)){
         // Full backup file — import every project it contains, regenerating ids to avoid collisions
@@ -6213,6 +6346,7 @@ document.getElementById('importFile').addEventListener('change', (e)=>{
             createdAt: Date.now(),
             sheetTypes: (src.sheetTypes||[]).map((s,i)=> sanitizeImportedSheetType(Object.assign({}, s, {id:null}), i)),
             parts: (src.parts||[]).map((p,i)=> sanitizeImportedPart(Object.assign({}, p, {id:null}), i)),
+            notes: typeof src.notes === 'string' ? src.notes : '',
             settings: Object.assign(defaultSettings(), src.settings || {})
           };
           projects.push(proj);
@@ -6231,6 +6365,7 @@ document.getElementById('importFile').addEventListener('change', (e)=>{
         createdAt: Date.now(),
         sheetTypes: (data.sheetTypes||[]).map((s,i)=> sanitizeImportedSheetType(s, i)),
         parts: (data.parts||[]).map((p,i)=> sanitizeImportedPart(p, i)),
+        notes: typeof data.notes === 'string' ? data.notes : '',
         // Checked against the job (and for overlaps) before it is ever shown.
         editedLayout: (data.editedLayout && typeof data.editedLayout === 'object' && !Array.isArray(data.editedLayout)) ? data.editedLayout : undefined,
         settings: Object.assign(defaultSettings(), data.settings || {
@@ -6261,6 +6396,13 @@ document.getElementById('projectNameInput').addEventListener('input', (e)=>{
   const proj = getProject(currentProjectId);
   if (!proj) return;
   proj.name = e.target.value;
+  persistAll();
+});
+// A project always keeps a name.
+document.getElementById('projectNameInput').addEventListener('blur', (e)=>{
+  const proj = getProject(currentProjectId);
+  if (!proj || e.target.value.trim()) return;
+  proj.name = e.target.value = 'Untitled project';
   persistAll();
 });
 

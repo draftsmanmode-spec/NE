@@ -1032,6 +1032,114 @@ const pdfBytes = await page.evaluate(async () => {
 });
 check(pdfBytes > 10000, `PDF export builds (${Math.round(pdfBytes/1024)} KB)`);
 
+// ---- whole-app audit fixes -------------------------------------------------
+const dialogs = [];
+page.on('dialog', d => dialogs.push(d.message()));
+// Results never leak between projects; the move bar closes on Home.
+const leak = await page.evaluate(() => {
+  const homeId = currentProjectId;
+  goToStep(3); runNesting();
+  const st = strategyResults[selectedStrategyKey];
+  layoutSelect(0, st.bins[0].placements[0]);
+  const barOpen = document.getElementById('layoutBar').classList.contains('open');
+  showHome();
+  const barClosedOnHome = !document.getElementById('layoutBar').classList.contains('open');
+  const proj = { id: nextId(), name: 'Empty B', createdAt: Date.now(), sheetTypes: [], parts: [], settings: defaultSettings() };
+  projects.push(proj); openProject(proj.id);
+  document.getElementById('markupPct').value = '10';
+  document.getElementById('markupPct').dispatchEvent(new Event('input'));
+  document.getElementById('secParts').dispatchEvent(new Event('change'));
+  const empty = document.getElementById('results').innerHTML === '' && lastRunParams === null;
+  document.getElementById('markupPct').value = ''; saveWorkingIntoCurrentProject();
+  openProject(homeId);
+  return { barOpen, barClosedOnHome, empty };
+});
+check(leak.barOpen && leak.barClosedOnHome && leak.empty, 'switching project drops the old results (no report from another job) and closes the move bar');
+
+// Bulk paste: fractions, qty 0, unreadable lines kept with a reason.
+const paste = await page.evaluate(() => {
+  const before = parts.length;
+  document.getElementById('bulkPaste').value = 'Gusset X, 10 1/2, 3/4, 0\nBad line, -4, 5, 2\nNo size, abc, 5\nPlate Y, 12", 8-1/4';
+  document.getElementById('parseBulk').click();
+  const g = parts.find(p => p.name === 'Gusset X'), pl = parts.find(p => p.name === 'Plate Y');
+  return { added: parts.length - before, g: g && [g.width, g.height, g.qty], pl: pl && [pl.width, pl.height, pl.qty],
+    left: document.getElementById('bulkPaste').value, note: document.getElementById('bulkNote').textContent };
+});
+check(paste.added === 2 && paste.g.join() === '10.5,0.75,0' && paste.pl.join() === '12,8.25,1'
+  && paste.left === 'Bad line, -4, 5, 2\nNo size, abc, 5' && /2 lines were not added/.test(paste.note),
+  `paste rows read 10 1/2 and 3/4, keep qty 0, and leave unreadable lines in the box with a reason (${paste.note})`);
+
+// Negative gaps are used as 0; negative sheet cost is not kept.
+const gaps = await page.evaluate(() => {
+  document.getElementById('partGap').value = '-2'; document.getElementById('borderGap').value = '-3';
+  runNesting();
+  const ok = lastRunParams.partGap === 0 && lastRunParams.borderGap === 0
+    && strategyResults[selectedStrategyKey].bins.every(b => b.placements.every(p => p.x >= 0 && p.y >= 0));
+  document.getElementById('partGap').value = '0.25'; document.getElementById('borderGap').value = '0.5';
+  return ok;
+});
+check(gaps, 'a negative part gap / border gap nests as 0 (no parts off the sheet)');
+
+// Project notes print on office and shop PDFs; $ lines stay off the shop copy.
+const notesPdf = await page.evaluate(async () => {
+  document.getElementById('projectNotes').value = 'Confirm grain direction on brackets\nCustomer agreed $500';
+  runNesting();
+  const ti = [], ts = [];
+  await buildNestingPdf('report', 'internal', ti); await buildNestingPdf('report', 'shop', ts);
+  document.getElementById('projectNotes').value = '';
+  return { i: ti.join(' | '), s: ts.join(' | ') };
+});
+check(has(notesPdf.i, 'Confirm grain direction on brackets', 'Customer agreed $500') && has(notesPdf.s, 'Confirm grain direction on brackets')
+  && lacks(notesPdf.s, '$'), 'project notes print on the office and shop PDFs, lines with $ never on the shop copy');
+
+// Import: notes kept, numbers written as text accepted, a wrong file refused.
+const impDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ne-imp-'));
+const goodJson = path.join(impDir, 'job.json'), badJson = path.join(impDir, 'bad.json');
+fs.writeFileSync(goodJson, JSON.stringify({ name: 'Imported job', notes: 'Bring the blue tape',
+  sheetTypes: [{ name: 'S', width: '48', height: '96', qty: '', cost: '50' }], parts: [{ name: 'P', width: '12', height: '6.5', qty: '3' }] }));
+fs.writeFileSync(badJson, JSON.stringify([1, 2, 3]));
+const nProj = await page.evaluate(() => projects.length);
+await page.setInputFiles('#importFile', goodJson);
+await page.waitForFunction(() => document.getElementById('projectNameInput').value === 'Imported job');
+const imported2 = await page.evaluate(() => ({ notes: document.getElementById('projectNotes').value, w: parts[0].width, h: parts[0].height, sw: sheetTypes[0].width }));
+await page.setInputFiles('#importFile', badJson);
+await page.waitForFunction(() => true);
+await page.waitForTimeout(300);
+const nAfter = await page.evaluate(() => projects.length);
+check(imported2.notes === "Bring the blue tape" && imported2.w === 12 && imported2.h === 6.5 && imported2.sw === 48 && nAfter === nProj + 1
+  && dialogs.some(m => /not a Nesting Estimator project/.test(m)),
+  'import keeps notes and reads "12" as 12; a file that is not a project is refused with a plain message');
+fs.rmSync(impDir, { recursive: true, force: true });
+
+// A strategy picked by hand stays picked when Results re-runs.
+const picked = await page.evaluate(() => {
+  sheetTypes = [{ id: nextId(), name: 'Small', width: 48, height: 48, qty: null, cost: 30 },
+                { id: nextId(), name: 'Big', width: 96, height: 48, qty: null, cost: 50 }];
+  parts = [{ id: nextId(), name: 'Q', width: 20, height: 20, qty: 6, rotate: true, color: null }];
+  saveWorkingIntoCurrentProject(); render(); runNesting();
+  const other = strategyOrder.find(k => k !== strategyOrder[0]);
+  switchStrategy(other);
+  runNesting();
+  const kept = selectedStrategyKey === other;
+  switchStrategy(strategyOrder[0]);
+  runNesting();
+  return kept && selectedStrategyKey === strategyOrder[0];
+});
+check(picked, 'a strategy picked with "Use this" is still picked after re-running');
+
+// Openings editor: "+ Add opening" lands somewhere free, so Save stays usable.
+const opAdd = await page.evaluate(() => {
+  const part = { id: nextId(), name: 'Plate', width: 30, height: 20, qty: 1, rotate: true, color: null };
+  setPartOpenings(part, [{ x: 2, y: 2, w: 8, h: 8 }]);
+  parts.push(part); render();
+  openOpeningsEditor(part);
+  document.getElementById('opAddRow').click();
+  const ok = opEdit.rows.length === 2 && !document.getElementById('opSaveBtn').disabled;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  return ok && !document.getElementById('openingsModal').classList.contains('open');
+});
+check(opAdd, '"+ Add opening" starts valid (no overlap) and Esc closes the editor');
+
 check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 await browser.close();
 fs.rmSync(tmp, { recursive: true, force: true });
