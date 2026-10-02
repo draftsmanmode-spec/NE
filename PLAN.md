@@ -103,6 +103,14 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Calculator: recalled price shows a result; new projects pick their first sheet; openings editor "+ Add opening" lands somewhere free; custom paper 5"-60"
 - [x] Tests: 119 checks (stale results, paste, gaps, notes in PDFs, import, picked strategy, openings editor, Esc)
 
+## Done — Design pass 2 + review fixes (2026-10-02)
+- [x] Results reads top-down: Export / Preview (Undo / Reset on the right), key numbers, Job details card (label / value rows), Compare strategies (Recommended badge, selected row), Parts, Material, Leftover pieces, Sheets; Options card at the end
+- [x] Project header: Save + a "More" menu (save/open project file, back up, example parts, clear) instead of seven loose buttons
+- [x] Phone widths: parts / sheet tables scroll sideways with usable inputs; header drops the app name
+- [x] One name everywhere: "Leftover pieces" (screen, Export window, PDF)
+- [x] Review fixes: a run that stops early (no parts / nothing fits) drops old results, so redrawing can't crash; a Tidy that moves nothing is not a hand edit; "every part is off the sheets" says so instead of blaming stock; any note line about money (price, quote, cost, USD, $ ...) stays off the shop PDF; readable step numbers
+- [x] Tests: 121 checks
+
 ## Next candidates
 - [ ] Rotate a single part by hand (turn 90 degrees in place when there is room)
 - [ ] Drag a part to a spot on the same sheet (today: tidy re-packs the whole sheet)

@@ -19,7 +19,7 @@ A project-level "Nest parts inside openings" switch (Nesting settings) turns it 
 on, the report states the saving vs. leaving openings empty (sheets and $, since cost is
 always whole sheets). Details and checklist in `PLAN.md`.
 
-Verified: `node tools/test_openings.mjs` — 119/119 pass (import, split mode, cut path, quote, export audiences, big jobs, geometry, rotation, stale
+Verified: `node tools/test_openings.mjs` — 121/121 pass (import, split mode, cut path, quote, export audiences, big jobs, geometry, rotation, stale
 openings, PDF export, review regressions, a seeded 40-job random stress test, and the money
 check: 2 frames + 10 tabs on 32x22 stock need 2 sheets with openings vs 3 without).
 Heavy job (304 parts, 4 sheet types, Quality): ~1 s; 2,500 parts ~5 s (was 23 s) thanks to the time budget.
@@ -49,8 +49,9 @@ Rebuild the installer on Windows (`.\build.ps1`), install, then a 5-minute smoke
     a typed file name; print one page to check the B&W drawing reads well on the shop printer.
 13. Look: light screens with blue buttons; switch Windows to dark mode and the app follows. Narrow the window: the
     sheet drawings shrink to fit and tapping a part still picks the right one.
-14. Type a note in step 1 Notes (one line with a $ in it), export Shop and Office PDFs: the note is at the top of both,
-    the $ line only on the office copy. Export JSON, import it back: the note is still there.
+14. Type a note in step 1 Notes (one line mentioning a price), export Shop and Office PDFs: the note is at the top of
+    both, the price line only on the office copy. Export JSON, import it back: the note is still there.
+15. Project header "More" menu: save the project as a file, open it back, back up all projects.
 Then pick from "Next candidates" in `PLAN.md`.
 
 ## Watch out for

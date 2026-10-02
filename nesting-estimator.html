@@ -313,7 +313,7 @@
   }
   .step-pill:hover{ color:var(--text); }
   .step-pill .n{
-    width:22px; height:22px; border-radius:50%; background:var(--line); color:var(--panel);
+    width:22px; height:22px; border-radius:50%; background:var(--line-soft); color:var(--text-dim);
     display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700;
   }
   .step-pill.active{ background:var(--panel); color:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.12), 0 3px 10px rgba(0,0,0,.06); }
@@ -888,7 +888,7 @@
 
       <details class="card" id="notesCard" style="margin-top:18px;">
         <summary>
-          Notes <span class="count">optional — printed at the top of the office and shop PDFs (lines with a $ stay off the shop copy)</span>
+          Notes <span class="count">optional — printed at the top of the office and shop PDFs (lines about prices or money stay off the shop copy)</span>
         </summary>
         <textarea id="projectNotes" placeholder="e.g. Customer: Acme Fab — wants clear anodized finish, needs by Friday, confirm grain direction on the brackets before cutting..." style="margin-top:12px; height:110px; font-size:12.5px;"></textarea>
       </details>
@@ -1027,13 +1027,13 @@
       <div id="results"></div>
       <details class="card" id="reportOptionsCard" style="margin-top:22px;">
         <summary>
-          Show on this screen <span class="count">parts list, material, leftovers, drawings, quoting tools</span>
+          Options <span class="count">what this screen shows, quoting tools, default PDF and paper</span>
         </summary>
         <div class="settings-grid" style="margin-top:12px;">
           <div class="checkline"><input type="checkbox" id="secParts" checked><label class="small">Parts list</label></div>
           <div class="checkline"><input type="checkbox" id="secBreakdown" checked><label class="small">Material breakdown</label></div>
           <div class="checkline"><input type="checkbox" id="secCommonLines" checked><label class="small">Common-line notes</label></div>
-          <div class="checkline"><input type="checkbox" id="secRemnants" checked><label class="small">Reusable remnants</label></div>
+          <div class="checkline"><input type="checkbox" id="secRemnants" checked><label class="small">Leftover pieces</label></div>
           <div class="checkline"><input type="checkbox" id="secSheets" checked><label class="small">Sheet layouts (drawings)</label></div>
           <div class="checkline"><input type="checkbox" id="secQuoting"><label class="small">Show quoting tools (customer quote PDF, company details)</label></div>
         </div>
@@ -3906,7 +3906,7 @@ function runNesting(){
   const validSheetTypesForNesting = sheetTypes.filter(st=> isValidDims(st.width, st.height));
 
   if (validSheetTypesForNesting.length===0 || parts.length===0 || parts.every(p=>!(p.qty>0))){
-    lastNestResult = null;
+    forgetResults();   // nothing from an earlier run may be redrawn over this
     results.innerHTML = invalidNote + '<div class="empty-state">Add at least one sheet type (step 2) and one part (step 1), then come back here.</div>';
     return;
   }
@@ -3917,7 +3917,7 @@ function runNesting(){
   nestOpeningsEnabled = fillOpenings;
   const sortedKeys = computeAllStrategies(partGap, borderGap, quality, validSheetTypesForNesting);
   if (sortedKeys.length===0){
-    lastNestResult = null;
+    forgetResults();
     results.innerHTML = invalidNote + (oversizedParts.length
       ? '<div class="warning-box"><b>None of the parts fit any of your sheets.</b> ' + oversizedHtml() + '</div>'
       : '<div class="warning-box"><b>None of your sheet sizes can hold every part.</b> Add a bigger sheet type, or check whether a part\'s dimensions are larger than any sheet you\'ve defined.</div>');
@@ -4096,7 +4096,8 @@ function renderReportBody(partGap, borderGap, quality){
   // Job details: one card of plain label / value rows.
   const details = [];
   const row = (label, value, id) => details.push(`<div class="info-row"${id ? ` id="${id}"` : ''}><div class="info-k">${label}</div><div class="info-v">${value}</div></div>`);
-  if (!bins.length) html += `<div class="warning-box"><b>Nothing could go on a sheet.</b> Every sheet type is at quantity 0 or too small. Set a sheet quantity (blank = unlimited) in step 2 (Nest).</div>`;
+  if (!bins.length && unplaced.some(u=> u.takenOff)) html += `<div class="layout-banner warn">Every part is off the sheets. Put them back from &ldquo;Not on a sheet&rdquo; above, or press Reset layout.</div>`;
+  else if (!bins.length) html += `<div class="warning-box"><b>Nothing could go on a sheet.</b> Every sheet type is at quantity 0 or too small. Set a sheet quantity (blank = unlimited) in step 2 (Nest).</div>`;
 
   if (oversizedParts.length) html += `<div class="warning-box" id="oversizedNote"><b>Not nested &mdash; too big for any sheet.</b> ${oversizedHtml()}</div>`;
   const stockOut = unplaced.filter(u=> !(s.tooBig || []).includes(u) && !u.takenOff);
@@ -4291,6 +4292,10 @@ function layoutEdit(fn){
   const snap = snapshotStrategy(st);
   let r;
   try { r = fn(st); } catch (e){ console.error(e); r = { error: 'That change could not be made: ' + (e && e.message ? e.message : e) }; }
+  if (r && r.same){   // asked for, but nothing to change: not a hand edit
+    layoutToast(r.same);
+    return false;
+  }
   if (!r || r.error){
     st.bins = snap.bins; st.unplaced = snap.unplaced;
     rerenderResults();   // cards must point at the restored sheets
@@ -4429,9 +4434,9 @@ function layoutTidy(binIdx){
     const re = repackOneSheet(b.sheetType, b.placements.map(unitOf), editParams());
     if (!re) return { error: 'Sheet ' + (binIdx + 1) + ' could not be re-packed any other way.' };
     const key = list => list.map(p=> [p.x, p.y, p.w, p.h].join(',')).sort().join(';');
-    const same = key(re) === key(b.placements);
+    if (key(re) === key(b.placements)) return { same: 'Sheet ' + (binIdx + 1) + ' is already as tidy as it gets - nothing moved.' };
     b.placements = re;
-    return { ok: ()=> same ? 'Sheet ' + (binIdx + 1) + ' is already as tidy as it gets - nothing moved.' : 'Sheet ' + (binIdx + 1) + ' re-packed.' };
+    return { ok: ()=> 'Sheet ' + (binIdx + 1) + ' re-packed.' };
   });
 }
 function layoutUndoLast(){
@@ -5402,10 +5407,11 @@ function pdfPlain(str){
     .replace(/\t/g, ' ').split('').map(ch => (ch >= ' ' && ch <= '~') || PDF_EXTRA_CHARS.includes(ch) ? ch : '?').join('');
 }
 // The project's own Notes (step 1), one bullet per non-empty line. The shop
-// PDF never prints a price, so lines with a $ stay off it.
+// PDF never prints a price, so a line that talks money stays off it.
+const MONEY_WORDS = /[$€£¢]|\b(usd|cad|eur|gbp|dollars?|price[sd]?|pricing|quoted?|quotes|costs?|costing|invoice[sd]?|paid|deposit|markup|margin|profit)\b/i;
 function projectNoteBullets(forShop){
   const el = document.getElementById('projectNotes');
-  return String(el ? el.value : '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !(forShop && l.includes('$'))).slice(0, 30)
+  return String(el ? el.value : '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !(forShop && MONEY_WORDS.test(l))).slice(0, 30)
     .map(l => ({ text: pdfPlain(l.length > 600 ? l.slice(0, 600) + '…' : l) }));
 }
 
@@ -5894,7 +5900,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
   if (S && !isCust && X.pdfRemnants !== false && mode === 'report'){
     const rem = findRemnants(bins, 6);
     if (rem.length){
-      pdfSectionTitle(doc, ctx, 'Reusable remnants');
+      pdfSectionTitle(doc, ctx, 'Leftover pieces');
       pdfTable(doc, ctx,
         [{ label: 'From sheet', key: 'sheet', w: 1.6, mono: true },
          { label: 'Size', key: 'size', w: 2.6, mono: true },

@@ -854,7 +854,7 @@ const shortage = await page.evaluate(() => {
   saveWorkingIntoCurrentProject(); render(); runNesting();
   const s = strategyResults[selectedStrategyKey];
   const short = s.unplaced.length;
-  layoutTidy(0);
+  layoutTakeOff(0, s.bins[0].placements[0]);   // a real hand edit
   loadProjectIntoWorking(currentProjectId); runNesting();
   const r = strategyResults[selectedStrategyKey];
   return { short, edited: r.edited, stillShort: r.unplaced.filter(u => !u.takenOff).length,
@@ -1082,15 +1082,15 @@ check(gaps, 'a negative part gap / border gap nests as 0 (no parts off the sheet
 
 // Project notes print on office and shop PDFs; $ lines stay off the shop copy.
 const notesPdf = await page.evaluate(async () => {
-  document.getElementById('projectNotes').value = 'Confirm grain direction on brackets\nCustomer agreed $500';
+  document.getElementById('projectNotes').value = 'Confirm grain direction on brackets\nCustomer agreed $500\nQuoted 1250 USD all in\nPay attention to the grain';
   runNesting();
   const ti = [], ts = [];
   await buildNestingPdf('report', 'internal', ti); await buildNestingPdf('report', 'shop', ts);
   document.getElementById('projectNotes').value = '';
   return { i: ti.join(' | '), s: ts.join(' | ') };
 });
-check(has(notesPdf.i, 'Confirm grain direction on brackets', 'Customer agreed $500') && has(notesPdf.s, 'Confirm grain direction on brackets')
-  && lacks(notesPdf.s, '$'), 'project notes print on the office and shop PDFs, lines with $ never on the shop copy');
+check(has(notesPdf.i, 'Confirm grain direction on brackets', 'Customer agreed $500', 'Quoted 1250 USD') && has(notesPdf.s, 'Confirm grain direction on brackets', 'Pay attention to the grain')
+  && lacks(notesPdf.s, '$', 'Quoted', 'USD'), 'project notes print on the office and shop PDFs; lines about money never on the shop copy');
 
 // Import: notes kept, numbers written as text accepted, a wrong file refused.
 const impDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ne-imp-'));
@@ -1148,6 +1148,26 @@ const menuShut = await page.evaluate(() => !document.getElementById('moreMenu').
 await page.click('#btnMore'); await page.mouse.click(5, 400);
 const menuShut2 = await page.evaluate(() => !document.getElementById('moreMenu').classList.contains('open'));
 check(menuOpen && menuShut && menuShut2, 'header "More" menu opens and closes with Esc or a click outside');
+
+// Review fixes: a no-op Tidy is not a hand edit; a run that stops early drops
+// the old results, so redrawing the report afterwards can't fail.
+const review = await page.evaluate(() => {
+  parts = [{ id: nextId(), name: 'Sq', width: 10, height: 10, qty: 4, rotate: true, color: null }];
+  sheetTypes = [{ id: nextId(), name: 'S', width: 48, height: 48, qty: null, cost: 10 }];
+  saveWorkingIntoCurrentProject(); render(); goToStep(3); runNesting();
+  layoutTidy(0); layoutTidy(0);
+  const notEdited = !currentStrategy().edited && !getProject(currentProjectId).editedLayout;
+  parts[0].qty = 0; saveWorkingIntoCurrentProject(); runNesting();
+  let threw = false;
+  try {
+    document.getElementById('markupPct').dispatchEvent(new Event('input'));
+    document.getElementById('secParts').dispatchEvent(new Event('change'));
+  } catch (e) { threw = true; }
+  const cleared = lastRunParams === null && lastNestResult === null;
+  parts[0].qty = 4; saveWorkingIntoCurrentProject(); runNesting();
+  return { notEdited, threw, cleared };
+});
+check(review.notEdited && !review.threw && review.cleared, 'a Tidy that moves nothing is not a hand edit; an empty run drops old results (no crash redrawing)');
 
 check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 await browser.close();

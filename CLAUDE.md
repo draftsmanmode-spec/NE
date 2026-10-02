@@ -18,6 +18,7 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - Drawing: `drawSheet`, `drawSheetThumb`, `rotatedBinView`; PDF: `buildNestingPdf(mode, audience)` with `PDF_AUDIENCES` (internal / shop / customer)
 - Money: `jobCosts` (material + cutting, markup, all in cents); big jobs: `SEARCH_BUDGET_MS`, oversized parts: `fitsSomeSheet` / `oversizedParts`
 - Split mode: `dxfSplitNested` (containment) with `dxfClusterRuns` (bbox) as fallback; cut path: `dxfCutStats`, `partCut`, `cutTotals`
+- Results page order is built in `renderReportBody` (actions, stats, Job details `info-row`s, compare table, tables, sheets); header extras live in the `#moreMenu`
 - Export window: `openExportDialog` / `renderExportDialog` / `exportPlanText`; choices live in `reportPrefs` (format, audience, summary, notes, pdfParts, pdfSheets, pdfRemnants, pdfBreakdown, sheetParts, checklist, mono, orientAll — PDF-only, never what Results shows) and `buildNestingPdf` reads them
 - Shop editing: `LAYOUT EDITING` section — `layoutMove` / `layoutTakeOff` / `layoutPutBack` / `layoutTidy` / `layoutUndoLast` / `layoutReset`; results drawn only by `rerenderResults`
 
@@ -41,7 +42,7 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - Look: colours only via the `:root` tokens (light) and their `prefers-color-scheme: dark` overrides; `--purple` is the
   one (blue) accent, green/red/amber mean good/problem/heads-up. Sheet drawings and PDF pages stay white paper.
 - Results are dropped by `forgetResults()` on project switch / Clear / Home; display-only changes redraw via `refreshReportIfShown()`.
-- Project notes print on office + shop PDFs via `projectNoteBullets` (lines with `$` never on the shop copy); user text in PDFs goes through `pdfPlain`.
+- Project notes print on office + shop PDFs via `projectNoteBullets` (lines matching `MONEY_WORDS` never on the shop copy); user text in PDFs goes through `pdfPlain`.
 - No bundler, no npm deps in the app. Keep it one file that works from `file://` and offline.
 - Saved projects live in `localStorage`; new part fields must survive `sanitizeImportedPart`.
 
