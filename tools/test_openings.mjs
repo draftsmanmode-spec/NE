@@ -1140,6 +1140,15 @@ const opAdd = await page.evaluate(() => {
 });
 check(opAdd, '"+ Add opening" starts valid (no overlap) and Esc closes the editor');
 
+// Header "More" menu: opens, its items are real buttons, Esc / outside click close it.
+await page.click('#btnMore');
+const menuOpen = await page.evaluate(() => document.getElementById('moreMenu').classList.contains('open') && !!document.querySelector('#moreMenu #btnClear'));
+await page.keyboard.press('Escape');
+const menuShut = await page.evaluate(() => !document.getElementById('moreMenu').classList.contains('open'));
+await page.click('#btnMore'); await page.mouse.click(5, 400);
+const menuShut2 = await page.evaluate(() => !document.getElementById('moreMenu').classList.contains('open'));
+check(menuOpen && menuShut && menuShut2, 'header "More" menu opens and closes with Esc or a click outside');
+
 check(errors.length === 0, 'no page errors' + (errors.length ? ': ' + errors.join(' | ') : ''));
 await browser.close();
 fs.rmSync(tmp, { recursive: true, force: true });

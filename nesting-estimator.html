@@ -115,6 +115,16 @@
   .brand .sub{ color:var(--text-faint); font-size:12px; }
   .topbar-actions{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
   #workspaceHeaderActions{ flex-wrap:wrap; }
+  body.in-workspace #btnImport, body.in-workspace #btnExportAll, body.in-workspace .topbar-actions > .header-divider{ display:none; }
+  .menu-wrap{ position:relative; display:inline-flex; }
+  .menu{ position:absolute; top:calc(100% + 6px); right:0; min-width:240px; display:none; flex-direction:column; padding:6px;
+    background:var(--panel); border:1px solid var(--line-soft); border-radius:12px; box-shadow:var(--shadow-lift); z-index:80; }
+  .menu.open{ display:flex; }
+  .menu button{ background:transparent; text-align:left; padding:9px 12px; border-radius:8px; font-size:13.5px; color:var(--text); white-space:nowrap; }
+  .menu button:hover{ background:var(--accent-tint); }
+  .menu button.danger{ color:var(--red); }
+  .menu button.danger:hover{ background:var(--red-tint); }
+  .menu-sep{ height:1px; background:var(--line-soft); margin:5px 8px; }
   .topbar-actions button{ white-space:nowrap; }
   .header-divider{ width:1px; height:22px; background:var(--line-soft); margin:0 2px; }
   #projectNameInput{ font-family:var(--display); font-weight:600; font-size:15px; background:transparent;
@@ -133,7 +143,9 @@
   button.primary:hover{ background:var(--purple); filter:brightness(1.08); }
   button.ghost{ background:transparent; color:var(--purple); }
   button.ghost:hover{ background:var(--accent-tint); }
-  button.ghost.danger{ color:var(--text-faint); font-size:15px; line-height:1; }
+  button.ghost.danger{ color:var(--red); }
+  /* The row "×" buttons stay quiet until you point at them. */
+  td.col-del button.ghost.danger, .card-actions button.danger{ color:var(--text-faint); font-size:15px; line-height:1; }
   button.danger:hover, button.ghost.danger:hover{ color:var(--red); background:var(--red-tint); }
   /* Header tools read as plain toolbar items; only "back" and "+ New" use the accent. */
   .topbar-actions button.ghost{ color:var(--text); }
@@ -147,10 +159,30 @@
   /* Shop-floor controls: large, plain-worded, finger-sized. */
   button.big{ padding:12px 20px; font-size:15px; font-weight:600; min-height:48px; border-radius:12px; }
   button.big:disabled, button.small:disabled{ opacity:.4; cursor:not-allowed; filter:none; }
-  .shop-bar{ display:flex; flex-wrap:wrap; gap:10px; margin:0 0 18px 0; }
+  .shop-bar{ display:flex; flex-wrap:wrap; gap:10px; margin:0 0 18px 0; align-items:center; }
+  .shop-bar .bar-gap{ flex:1 1 0; min-width:8px; }
+  .section-title{ font-size:20px; font-weight:700; letter-spacing:-.015em; margin:26px 0 12px 2px; display:flex; align-items:baseline; gap:8px; }
+  .section-title .count{ font-size:14px; font-weight:500; color:var(--text-faint); }
+  .section-card{ margin:0 0 20px 0; }
+  .card.section-card + .card.section-card{ margin-top:0; }
+  .info-card{ padding:8px 22px 8px 22px; }
+  .info-card h2{ margin:12px 0 4px 0; }
+  .info-row{ display:grid; grid-template-columns:150px 1fr; gap:16px; padding:11px 0; border-top:1px solid var(--line-soft); font-size:14px; line-height:1.5; }
+  .info-row:first-of-type{ border-top:none; }
+  .info-k{ color:var(--text-dim); font-weight:500; }
+  .info-v{ color:var(--text-dim); }
+  .info-v span{ color:var(--text); font-weight:500; }
+  @media (max-width:720px){ .info-row{ grid-template-columns:1fr; gap:2px; } }
+  .badge{ display:inline-block; font-size:11.5px; font-weight:600; padding:2px 8px; border-radius:999px; margin-left:6px; vertical-align:1px;
+    background:var(--accent-tint); color:var(--purple); white-space:nowrap; }
+  .badge.green{ background:var(--green-tint); color:var(--green); }
+  table.breakdown tr.sel td{ background:var(--accent-tint); }
+  .report-actions{ margin:4px 0 18px 0; }
+  .card table.breakdown{ box-shadow:none; border:1px solid var(--line-soft); margin-bottom:6px; }
+  .pv-paper-row label.small{ margin:0; }
   .layout-banner{ border:none; background:var(--accent-tint); border-radius:12px; padding:12px 16px; margin:0 0 16px 0; font-size:14px; }
   .layout-banner.warn{ background:var(--amber-tint); }
-  .layout-hint{ font-size:14px; color:var(--text-dim); margin:4px 0 12px 0; }
+  .layout-hint{ font-size:14px; color:var(--text-dim); margin:-4px 0 14px 2px; }
   .sheet-canvas{ cursor:pointer; }
   .tray-card{ border:2px dashed var(--amber); background:var(--amber-tint); border-radius:14px; padding:14px 18px; margin:0 0 18px 0; }
   .tray-card h3{ margin:0 0 10px 0; font-family:var(--display); font-size:17px; }
@@ -183,6 +215,7 @@
   button.ex-opt:disabled{ opacity:.35; }
   .ex-row{ display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
   .ex-row select, .ex-row input[type=text]{ min-height:48px; font-size:15px; }
+  .ex-row select{ width:auto; min-width:260px; max-width:100%; }
   .ex-summary{ font-size:14.5px; padding:12px 16px; border-radius:12px; background:var(--accent-tint); border:none; }
   .ex-summary.bad{ background:var(--red-tint); color:var(--red); }
   /* A dark pill that floats over everything, like a system notice. */
@@ -363,11 +396,11 @@
   .bottom-nav button{ padding:11px 22px; font-size:15px; border-radius:12px; min-height:46px; }
 
   .summary-strip{
-    display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px;
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:12px;
     background:transparent; border:none; border-radius:0; overflow:visible; margin-bottom:20px;
   }
-  .stat{ background:var(--panel); padding:16px 20px; border-radius:16px; box-shadow:var(--shadow); }
-  .stat .num{ font-family:var(--display); font-size:30px; font-weight:700; color:var(--text); letter-spacing:-.02em; }
+  .stat{ background:var(--panel); padding:14px 16px; border-radius:16px; box-shadow:var(--shadow); min-width:0; }
+  .stat .num{ font-family:var(--display); font-size:26px; font-weight:700; color:var(--text); letter-spacing:-.02em; white-space:nowrap; }
   .stat:first-child .num{ color:var(--purple); }
   .stat .num.green{ color:var(--green); }
   .stat .num.red{ color:var(--red); }
@@ -391,7 +424,7 @@
   .sheet-card-head{ display:flex; justify-content:space-between; align-items:center; padding:12px 18px; border-bottom:1px solid var(--line-soft); background:var(--panel); flex-wrap:wrap; gap:8px; }
   .sheet-card-head .name{ font-weight:600; font-size:16px; font-family:var(--display); }
   .sheet-card-head .meta{ font-size:13px; color:var(--text-dim); }
-  .sheet-canvas-wrap{ padding:16px 18px; overflow-x:auto; }
+  .sheet-canvas-wrap{ padding:16px 18px; overflow-x:auto; display:flex; justify-content:center; }
   /* Drawn 920px wide; on a smaller screen it shrinks to fit (taps still map
      to the right part, they are measured against the shown size). */
   canvas.sheet-canvas{ display:block; background:#ffffff; border-radius:8px; border:1px solid var(--line-soft);
@@ -502,7 +535,7 @@
     #reportBody > #reportPage1 ~ *,
     .step-panel#step3 > #results > .card:first-child{ }
     /* comparison table card is the first .card inside #results (before #reportBody) */
-    #results > .card{ display:none !important; }
+    #results > .card, #strategyCard{ display:none !important; }
 
     /* Summary stat tiles */
     .summary-strip{ border:1px solid #ccc; border-radius:8px; margin-bottom:16px; background:#ccc; }
@@ -598,6 +631,10 @@
     .bottom-nav{ padding:10px 14px; }
     .card{ padding:16px; }
     table.breakdown{ display:block; overflow-x:auto; }
+    /* Parts / sheets tables keep usable inputs and scroll sideways instead. */
+    .card:has(> table.grid-table), .card:has(table#dxfReviewTable){ overflow-x:auto; }
+    table.grid-table{ min-width:620px; }
+    .brand > div{ display:none; }
   }
   .pv-paper-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px;
     color:var(--text-dim); margin-bottom:10px; }
@@ -772,10 +809,18 @@
       <button class="ghost small" id="btnGoHome">&larr; All projects</button>
       <input type="text" id="projectNameInput" title="Click to rename this project">
       <span class="header-divider"></span>
-      <button class="ghost small" id="btnSample">Fill with example</button>
-      <button class="ghost small" id="btnClear">Clear</button>
-      <button class="ghost small" id="btnExport">Export JSON</button>
       <button class="ghost small" id="saveProject">Save</button>
+      <span class="menu-wrap">
+        <button class="ghost small" id="btnMore" aria-haspopup="menu" aria-expanded="false">More &#9662;</button>
+        <div class="menu" id="moreMenu" role="menu">
+          <button role="menuitem" id="btnExport">Save project as a file (JSON)</button>
+          <button role="menuitem" data-proxy="btnImport">Open a project file&hellip;</button>
+          <button role="menuitem" data-proxy="btnExportAll">Back up all projects</button>
+          <div class="menu-sep"></div>
+          <button role="menuitem" id="btnSample">Fill with example parts</button>
+          <button role="menuitem" class="danger" id="btnClear">Clear parts and sheets&hellip;</button>
+        </div>
+      </span>
     </span>
     <span class="header-divider"></span>
     <input type="file" id="importFile" accept="application/json" style="display:none">
@@ -977,11 +1022,12 @@
 
     <!-- ============ STEP 3: RESULTS ============ -->
     <section class="step-panel" id="step3">
-      <h2 class="panel-title">Nesting report</h2>
-      <p class="panel-desc">Sheets needed, efficiency, and a to-scale layout of every sheet with parts labelled, ready to print or hand to your cutting shop as a reference.</p>
-      <details class="card" id="reportOptionsCard" style="margin-bottom:18px;">
+      <h2 class="panel-title">Results</h2>
+      <p class="panel-desc">How many sheets, what it costs, and every sheet drawn with its parts. Export for the shop, or tap a part to move it.</p>
+      <div id="results"></div>
+      <details class="card" id="reportOptionsCard" style="margin-top:22px;">
         <summary>
-          Report sections <span class="count">choose what to show below</span>
+          Show on this screen <span class="count">parts list, material, leftovers, drawings, quoting tools</span>
         </summary>
         <div class="settings-grid" style="margin-top:12px;">
           <div class="checkline"><input type="checkbox" id="secParts" checked><label class="small">Parts list</label></div>
@@ -1018,7 +1064,7 @@
           <span class="small" id="paperNote" style="color:var(--text-faint);"></span>
         </div>
       </details>
-      <details class="card" id="quoteDetailsCard" style="margin-bottom:18px;">
+      <details class="card" id="quoteDetailsCard" style="margin-top:18px;">
         <summary>
           Quote &amp; company details <span class="count">printed on the customer quote PDF</span>
         </summary>
@@ -1046,7 +1092,6 @@
           </div>
         </div>
       </details>
-      <div id="results"></div>
     </section>
 
 
@@ -1210,6 +1255,7 @@ function showHome(){
   document.getElementById('homeView').style.display = '';
   document.getElementById('workspaceView').style.display = 'none';
   document.getElementById('workspaceHeaderActions').style.display = 'none';
+  document.body.classList.remove('in-workspace');
   renderHome();
 }
 
@@ -1219,6 +1265,7 @@ function openProject(id){
   document.getElementById('homeView').style.display = 'none';
   document.getElementById('workspaceView').style.display = '';
   document.getElementById('workspaceHeaderActions').style.display = 'inline-flex';
+  document.body.classList.add('in-workspace');
   goToStep(1);
 }
 
@@ -3813,7 +3860,7 @@ function computeAllStrategies(partGap, borderGap, quality, sheetTypesForNesting)
 }
 
 function buildStrategyCompareTable(sortedKeys){
-  let html = '<div class="card" style="margin-bottom:22px;"><h2>Compare nesting strategies <span class="count">pick which one the report below uses</span></h2>';
+  let html = '<div class="card section-card" id="strategyCard"><h2>Compare strategies <span class="count">pick the one this report uses</span></h2>';
   html += '<p style="font-size:11.5px; color:var(--text-dim); margin:0 0 12px 0;">Efficiency is per-sheet fill % (two very different strategies can share the same %). <b style="color:var(--text);">Wasted material</b> and <b style="color:var(--text);">cost</b> are the totals that actually tell you which is cheaper overall.</p>';
   const showBase = sortedKeys.some(k=> strategyResults[k].noOpenings);
   html += '<table class="breakdown"><thead><tr><th>Strategy</th><th>Sheets</th><th>Efficiency</th><th>Wasted material</th><th>Cost</th><th>Unplaced</th>'
@@ -3822,11 +3869,11 @@ function buildStrategyCompareTable(sortedKeys){
     const s = strategyResults[key];
     const b = s.noOpenings;
     const baseCell = !showBase ? '' : !b ? '<td>&mdash;</td>'
-      : `<td>${b.sheets} sht${b.costKnown ? ' &middot; $'+b.cost.toFixed(2) : ''}${b.sheets>s.sheets ? ' <span style="color:var(--green); font-size:10.5px;" title="Sheets saved by nesting into openings">saves '+(b.sheets-s.sheets)+'</span>' : ''}</td>`;
+      : `<td>${b.sheets} sht${b.costKnown ? ' &middot; $'+b.cost.toFixed(2) : ''}${b.sheets>s.sheets ? ' <span class="badge green" title="Sheets saved by nesting into openings">saves '+(b.sheets-s.sheets)+'</span>' : ''}</td>`;
     const isSelected = key===selectedStrategyKey;
     const wasteSqFt = (s.wastedArea/144).toFixed(1);
-    html += `<tr>
-      <td>${escHtml(s.label)}${i===0 ? ' <span style="color:var(--green); font-size:10.5px;">&#9733; recommended</span>' : ''}</td>
+    html += `<tr class="${isSelected ? 'sel' : ''}">
+      <td>${escHtml(s.label)}${i===0 ? ' <span class="badge green">Recommended</span>' : ''}</td>
       <td>${s.sheets}</td>
       <td>${s.efficiency.toFixed(1)}%</td>
       <td>${wasteSqFt} ft&sup2;</td>
@@ -4008,6 +4055,7 @@ function renderReportBody(partGap, borderGap, quality){
   html += `<div class="shop-bar">
     <button class="big primary" id="btnPrint" title="Choose what goes in the file and the format">&#11015; Export&hellip;</button>
     <button class="big" id="btnOverview" title="See the one-page overview and set each sheet's orientation">Preview pages&hellip;</button>
+    <span class="bar-gap"></span>
     <button class="big" id="btnUndo" ${layoutUndo.length ? '' : 'disabled'} title="Undo the last change to the layout">&#8630; Undo</button>
     <button class="big" id="btnResetLayout" ${s.edited ? '' : 'disabled'} title="Throw away hand edits and go back to the computed layout">Reset layout</button>
   </div>`;
@@ -4045,8 +4093,10 @@ function renderReportBody(partGap, borderGap, quality){
     : s.efficiency>=65 ? 'in the typical range for real-world sheet nesting (roughly 65&ndash;75%)'
     : s.efficiency>=45 ? 'below typical (65&ndash;75% is common) — worth trying "Try harder" or a different strategy above'
     : 'well below typical — check part sizes against sheet size, or try a different strategy above';
-  if (bins.length) html += `<div class="gap-note" style="margin-top:-14px;">Efficiency context: this result is <span>${effBand}</span>.</div>`;
-  else html += `<div class="warning-box"><b>Nothing could go on a sheet.</b> Every sheet type is at quantity 0 or too small. Set a sheet quantity (blank = unlimited) in step 2 (Nest).</div>`;
+  // Job details: one card of plain label / value rows.
+  const details = [];
+  const row = (label, value, id) => details.push(`<div class="info-row"${id ? ` id="${id}"` : ''}><div class="info-k">${label}</div><div class="info-v">${value}</div></div>`);
+  if (!bins.length) html += `<div class="warning-box"><b>Nothing could go on a sheet.</b> Every sheet type is at quantity 0 or too small. Set a sheet quantity (blank = unlimited) in step 2 (Nest).</div>`;
 
   if (oversizedParts.length) html += `<div class="warning-box" id="oversizedNote"><b>Not nested &mdash; too big for any sheet.</b> ${oversizedHtml()}</div>`;
   const stockOut = unplaced.filter(u=> !(s.tooBig || []).includes(u) && !u.takenOff);
@@ -4059,24 +4109,24 @@ function renderReportBody(partGap, borderGap, quality){
     }).join(', ');
     html += `<div class="warning-box"><b>${stockOut.length} part(s) could not be placed</b> &mdash; sheet stock ran out for: ${lines}. Raise the sheet quantity in step 2 (Nest), or try a different strategy above.</div>`;
   }
+  if (bins.length) row('Efficiency', `This result is <span>${effBand}</span>.`);
+  row('Layout', `<span>${escHtml(strategyResults[selectedStrategyKey].label)}</span> &middot; part gap <span>${partGap}"</span> &middot; border gap <span>${borderGap}"</span> &middot; <span>${['Fast','Balanced','Quality'][quality]}</span> search`);
   const sr = s.search;
   if (sr && sr.planned && sr.tried < sr.planned){
-    html += `<div class="gap-note" id="searchNote" style="margin-top:-6px;">&#9201; Large job: compared <span>${sr.tried}</span> of ${sr.planned} candidate layouts within the time limit, strongest first. &ldquo;Try harder&rdquo; searches more.</div>`;
+    row('Search', `Large job: compared <span>${sr.tried}</span> of ${sr.planned} candidate layouts within the time limit, strongest first. &ldquo;Try harder&rdquo; searches more.`, 'searchNote');
   }
-
-  html += `<div class="gap-note">Strategy: <span>${escHtml(strategyResults[selectedStrategyKey].label)}</span> &nbsp;&middot;&nbsp; Part gap: <span>${partGap}"</span> &nbsp;&middot;&nbsp; Border gap: <span>${borderGap}"</span> &nbsp;&middot;&nbsp; Quality pass: <span>${['Fast','Balanced','Quality'][quality]}</span></div>`;
   const cutText = cutSummaryText(cut);
-  if (cutText) html += `<div class="gap-note" id="cutNote" style="margin-top:-16px;">&#9986; <span>${escHtml(cutText)}</span></div>`;
+  if (cutText) row('Cutting', `<span>${escHtml(cutText)}</span>`, 'cutNote');
   const savingText = openingsSavingText(s, nestedInOpenings);
-  if (savingText){
-    html += `<div class="gap-note" id="openingsNote" style="margin-top:-16px;">&#9635; <span>${escHtml(savingText)}</span></div>`;
-  }
+  if (savingText) row('Openings', `<span>${escHtml(savingText)}</span>`, 'openingsNote');
   if (reportPrefs.commonLines && commonLines.count>0){
-    html += `<div class="gap-note" style="margin-top:-16px;">&#9878; <span>${commonLines.count}</span> common-line opportunit${commonLines.count===1?'y':'ies'} detected (~<span>${commonLines.totalLength.toFixed(1)}"</span> total edge length) — adjacent parts that are exactly aligned. Cutting these shared edges as one line instead of two saves kerf width and a pierce each.</div>`;
+    row('Common lines', `<span>${commonLines.count}</span> shared edge${commonLines.count===1?'':'s'} (~<span>${commonLines.totalLength.toFixed(1)}"</span>): adjacent parts exactly aligned. Cutting a shared edge once saves a kerf width and a pierce.`);
   }
+  html += `<div class="card section-card info-card"><h2>Job details</h2>${details.join('')}</div>`;
+  if (sheetTypes.length > 1) html += buildStrategyCompareTable(strategyOrder.filter(k=> strategyResults[k]));
 
   if (reportPrefs.parts){
-    html += '<table class="breakdown"><thead><tr><th style="width:34px;">Tag</th><th>Part</th><th>Size</th><th class="col-rot">Rotation</th><th>Qty</th><th class="col-placed">Placed</th><th>Unplaced</th></tr></thead><tbody>';
+    html += '<h3 class="section-title">Parts</h3><table class="breakdown"><thead><tr><th style="width:34px;">Tag</th><th>Part</th><th>Size</th><th class="col-rot">Rotation</th><th>Qty</th><th class="col-placed">Placed</th><th>Unplaced</th></tr></thead><tbody>';
     parts.forEach((p, idx)=>{
       const placedCount = placedCountByPart[p.id]||0;
       const unplacedCount = unplacedCountByPart[p.id]||0;
@@ -4086,7 +4136,7 @@ function renderReportBody(partGap, borderGap, quality){
   }
 
   if (reportPrefs.breakdown){
-    html += '<table class="breakdown"><thead><tr><th>Material</th><th>Sheet size</th><th>Sheets used</th><th>Sheet area</th><th>Used area</th><th>Efficiency</th>' + (s.costKnown?'<th>Cost</th>':'') + '</tr></thead><tbody>';
+    html += '<h3 class="section-title">Material</h3><table class="breakdown"><thead><tr><th>Material</th><th>Sheet size</th><th>Sheets used</th><th>Sheet area</th><th>Used area</th><th>Efficiency</th>' + (s.costKnown?'<th>Cost</th>':'') + '</tr></thead><tbody>';
     Object.values(byType).forEach(rec=>{
       if (rec.sheets===0) return;
       const eff = rec.area>0 ? (100*rec.used/rec.area) : 0;
@@ -4098,7 +4148,7 @@ function renderReportBody(partGap, borderGap, quality){
   }
 
   if (reportPrefs.remnants && remnants.length){
-    html += '<div class="card"><h2>Reusable remnants <span class="count">save leftover space as sheet stock for a later job</span></h2>';
+    html += '<div class="card section-card"><h2>Leftover pieces <span class="count">big enough to keep; add one as sheet stock for a later job</span></h2>';
     html += '<table class="breakdown"><thead><tr><th>From sheet</th><th>Approx. usable size</th><th></th></tr></thead><tbody>';
     remnants.forEach((r, idx)=>{
       html += `<tr><td>${escHtml(r.sheetName)} (#${r.sheetIndex+1})</td><td>${r.w}" &times; ${r.h}"</td><td><button class="small" data-remnant-add="${idx}">+ Add as sheet stock</button></td></tr>`;
@@ -4106,19 +4156,22 @@ function renderReportBody(partGap, borderGap, quality){
     html += '</tbody></table></div>';
   }
 
-  html += `<div class="row-actions" style="margin-bottom:18px;">
+  html += `<div class="row-actions report-actions">
     <button id="btnEditParts">&#9998; Edit parts</button>
     <button id="btnEditSheets">&#9998; Edit sheets &amp; settings</button>
     <button id="btnTryHarder" title="Alternates fresh random layouts with small tweaks to your current best one — only updates if it finds a genuinely better result, never makes it worse">&#8635; Try harder</button>
   </div>
-  <div id="tryHarderNote" style="font-size:12px; color:var(--text-dim); margin:-10px 0 18px 0; min-height:16px;"></div>`;
+  <div id="tryHarderNote" style="font-size:13px; color:var(--text-dim); margin:-8px 0 18px 0; min-height:16px;"></div>`;
   html += '</div>'; // end reportPage1
-  if (reportPrefs.sheets && bins.length) html += '<div class="layout-hint">&#9757; Tap a part on a sheet to move it to another sheet or take it off.</div>';
+  if (reportPrefs.sheets && bins.length) html += '<h3 class="section-title">Sheets <span class="count">' + bins.length + '</span></h3><div class="layout-hint">Tap a part on a sheet to move it to another sheet or take it off.</div>';
   html += '<div id="sheetCards"></div>';
   html += '<div class="print-export-footer" id="exportFooterReport"></div>';
 
   document.getElementById('reportBody').innerHTML = html;
   document.getElementById('btnPrint').addEventListener('click', ()=> openExportDialog());
+  document.querySelectorAll('[data-select-strategy]').forEach(b=>{
+    b.addEventListener('click', ()=> switchStrategy(b.dataset.selectStrategy));
+  });
   document.getElementById('btnEditParts').addEventListener('click', ()=> goToStep(1));
   document.getElementById('btnEditSheets').addEventListener('click', ()=> goToStep(2));
   document.getElementById('btnOverview').addEventListener('click', printOverview);
@@ -4270,15 +4323,10 @@ function settleLayout(st, edited){
 let strategyOrder = [];
 function rerenderResults(){
   if (!lastRunParams) return;
-  const keys = strategyOrder.filter(k=> strategyResults[k]);
   const resultsDiv = document.getElementById('results');
   let html = lastInvalidNote || '';
-  if (sheetTypes.length > 1) html += buildStrategyCompareTable(keys);
   html += '<div id="reportBody"></div>';
   resultsDiv.innerHTML = html;
-  document.querySelectorAll('[data-select-strategy]').forEach(b=>{
-    b.addEventListener('click', ()=> switchStrategy(b.dataset.selectStrategy));
-  });
   renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
 }
 function switchStrategy(key){
@@ -5035,7 +5083,7 @@ function buildSheetCard(bin, globalIndex){
   head.className = 'sheet-card-head';
   head.innerHTML = `
     <div class="name">Sheet ${globalIndex+1} &middot; ${escHtml(bin.sheetType.name)} (#${bin.indexInType})</div>
-    <div class="meta">${bin.w}" &times; ${bin.h}" &nbsp;|&nbsp; ${bin.placements.length} parts &nbsp;|&nbsp; ${eff.toFixed(1)}% used</div>
+    <div class="meta">${bin.w}" &times; ${bin.h}" &middot; ${bin.placements.length} parts &middot; ${eff.toFixed(1)}% used</div>
     <span style="display:flex; gap:8px;">
       <button class="small" data-tidy="1" title="Re-pack this sheet's parts; nothing leaves the sheet">Tidy this sheet</button>
       <button class="small ghost" data-png="1">Download PNG</button>
@@ -6391,6 +6439,23 @@ document.getElementById('btnExportAll').addEventListener('click', ()=>{
   URL.revokeObjectURL(url);
 });
 document.getElementById('btnNewProjectHeader').addEventListener('click', createNewProject);
+// "More" menu in the project header: rare actions, out of the way.
+function setMoreMenu(open){
+  document.getElementById('moreMenu').classList.toggle('open', open);
+  document.getElementById('btnMore').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+document.getElementById('btnMore').addEventListener('click', e=>{
+  e.stopPropagation();
+  setMoreMenu(!document.getElementById('moreMenu').classList.contains('open'));
+});
+document.getElementById('moreMenu').addEventListener('click', e=>{
+  const item = e.target.closest('button');
+  if (!item) return;
+  setMoreMenu(false);
+  if (item.dataset.proxy) document.getElementById(item.dataset.proxy).click();
+});
+document.addEventListener('click', e=>{ if (!e.target.closest('.menu-wrap')) setMoreMenu(false); });
+document.addEventListener('keydown', e=>{ if (e.key === 'Escape') setMoreMenu(false); });
 document.getElementById('btnGoHome').addEventListener('click', showHome);
 document.getElementById('projectNameInput').addEventListener('input', (e)=>{
   const proj = getProject(currentProjectId);
