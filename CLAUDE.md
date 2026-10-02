@@ -15,7 +15,12 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - `DXF IMPORT` → `INTERIOR OPENINGS` → review modal (`dxfReadFile`, `renderDxfReviewTable`) → `OPENINGS EDITOR` (hand-typed openings)
 - `PACKING ALGORITHM` (MaxRects: `packSheetsOnce`, `packSheetsBest`, `packMoreAttempts`)
 - `RIGHTSIZE PASS`, `COMMON-LINE`, `REMNANT CAPTURE`, `STRATEGY COMPARISON`
-- Drawing: `drawSheet`, `drawSheetThumb`, `rotatedBinView`; PDF: `buildNestingPdf`
+- Drawing: `drawSheet`, `drawSheetThumb`, `rotatedBinView`; PDF: `buildNestingPdf(mode, audience)` with `PDF_AUDIENCES` (internal / shop / customer)
+- Money: `jobCosts` (material + cutting, markup, all in cents); big jobs: `SEARCH_BUDGET_MS`, oversized parts: `fitsSomeSheet` / `oversizedParts`
+- Split mode: `dxfSplitNested` (containment) with `dxfClusterRuns` (bbox) as fallback; cut path: `dxfCutStats`, `partCut`, `cutTotals`
+- Results page order is built in `renderReportBody` (actions, stats, Job details `info-row`s, compare table, tables, sheets); header extras live in the `#moreMenu`
+- Export window: `openExportDialog` / `renderExportDialog` / `exportPlanText`; choices live in `reportPrefs` (format, audience, summary, notes, pdfParts, pdfSheets, pdfRemnants, pdfBreakdown, sheetParts, checklist, mono, orientAll — PDF-only, never what Results shows) and `buildNestingPdf` reads them
+- Shop editing: `LAYOUT EDITING` section — `layoutMove` / `layoutTakeOff` / `layoutPutBack` / `layoutTidy` / `layoutUndoLast` / `layoutReset`; results drawn only by `rerenderResults`
 
 ## Rules that matter
 - Nesting is **bounding-box (rectangles) only**, by design. Openings are offered as
@@ -25,6 +30,19 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
   Cost is always whole sheets; area only breaks ties, so openings-filled and openings-empty layouts must score the same material.
 - Openings reach the packer only through `unitForPart()`, gated by the project switch `nestOpeningsEnabled`.
 - One 90° rotation convention everywhere: local (u,v) → (H − v, u). Packer and `rotatedBinView` must agree.
+- PDF audiences: the shop PDF never prints a price, the customer PDF never shows cost, markup, efficiency or sheets.
+  Every money figure comes from `jobCosts` so printed lines add up (per-part lines get whole cents by largest
+  remainder, summing exactly to the quote). Tests check this via `buildNestingPdf`'s `trace`.
+- Company details live in `localStorage` (`nestingEstimatorBusiness_v1`, logo separately); quote customer/number per project settings.
+- PDF text must use the embedded font subset: ASCII plus `°·×²½¼¾–—‘’“”•…✓` (see tools/make_pdf_fonts.py).
+- Every hand edit goes through `layoutEdit()` (snapshot, validate, restore on refusal) and `settleLayout()`;
+  placements are made only by `makePlacement()`. Saved edits (`proj.editedLayout`) are trusted only if the
+  job signature matches, every part is accounted for, and `binLooksValid` passes.
+- The shop uses this: big buttons, plain words, no jargon; quoting tools stay behind `reportPrefs.quoting`.
+- Look: colours only via the `:root` tokens (light) and their `prefers-color-scheme: dark` overrides; `--purple` is the
+  one (blue) accent, green/red/amber mean good/problem/heads-up. Sheet drawings and PDF pages stay white paper.
+- Results are dropped by `forgetResults()` on project switch / Clear / Home; display-only changes redraw via `refreshReportIfShown()`.
+- Project notes print on office + shop PDFs via `projectNoteBullets` (lines matching `MONEY_WORDS` never on the shop copy); user text in PDFs goes through `pdfPlain`.
 - No bundler, no npm deps in the app. Keep it one file that works from `file://` and offline.
 - Saved projects live in `localStorage`; new part fields must survive `sanitizeImportedPart`.
 

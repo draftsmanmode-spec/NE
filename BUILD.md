@@ -143,6 +143,17 @@ involved.
   command (`tauri-plugin-dialog`). Opened outside Tauri the page falls back to a
   browser download, which is how the export path is testable in a browser.
 
+- **Audience** ("PDF for" in Report sections or the preview): *Internal report*
+  (costs, notes, material, linked sheet index, parts, remnants, sheets), *Shop cut
+  sheets* (no prices) or *Customer quote* (one price page). The file name says
+  which (`Job - report.pdf`, `Job - cut sheets.pdf`, `Job - quote.pdf`).
+- **Customer quote** carries your letterhead (Results -> "Quote & company details":
+  company, contact, address, logo, terms, validity) and, optionally, a price per part.
+- **Cut list CSV** ("Cut list (CSV)" on the report) goes through the same `save_pdf`
+  command, which takes an optional `filterName` / `extensions` for the dialog's file type.
+- **Navigation**: the PDF opens with its bookmarks panel (Summary, Parts, every
+  sheet); sheet index rows jump to their sheet, and each sheet page links back.
+
 The preview modal is the source of truth: per-sheet include/exclude and
 orientation overrides are read straight out of it when the PDF is built, so the
 file matches what the preview shows.

@@ -1,7 +1,17 @@
-# Handoff — 2026-10-01
+# Handoff — 2026-10-02
 
 ## State
-Branch `claude/intelligent-bardeen-84x4o1`. Shipped "Fill interior openings": DXF import now
+Openings work merged to `main` (draftsmanmode-spec/NE#1). Follow-up on branch
+`claude/intelligent-bardeen-84x4o1` (draftsmanmode-spec/NE#2, open, not merged): smarter DXF split
+mode, cut path / laser cost, quote incl. cutting, time-budgeted search for big jobs, oversized parts
+held back, PDF export by audience (internal / shop / customer) with bookmarks and links, a quote
+letterhead with per-part prices, shop sign-off sheets and a CSV cut list, and shop-floor layout
+editing on the Results step (move / take off / put back / tidy / undo, saved with the project).
+Quote tools are hidden by default (Report sections > "Show quoting tools"). "Export..." on Results opens
+one Export window (format, audience, what to include, sheets, paper/orientation/B&W, file name). Latest round: an
+Apple-style look (light, one blue accent, follows Windows dark mode) and a whole-app audit with ~25 fixes (stale results
+between projects, notes in PDFs/backups, stricter paste and inputs, Esc on every window, remembered strategy). See `PLAN.md`.
+Shipped "Fill interior openings": DXF import now
 finds usable cut-outs (frame drop-outs) and the nester places smaller parts inside them,
 keeping the part gap from the cut edge. Hand-typed parts can get openings too: the ✎ editor
 in the parts list (frame preset or custom rectangles) or a 5th "rail" value in paste rows.
@@ -9,10 +19,10 @@ A project-level "Nest parts inside openings" switch (Nesting settings) turns it 
 on, the report states the saving vs. leaving openings empty (sheets and $, since cost is
 always whole sheets). Details and checklist in `PLAN.md`.
 
-Verified: `node tools/test_openings.mjs` — 40/40 pass (import, geometry, rotation, stale
+Verified: `node tools/test_openings.mjs` — 121/121 pass (import, split mode, cut path, quote, export audiences, big jobs, geometry, rotation, stale
 openings, PDF export, review regressions, a seeded 40-job random stress test, and the money
 check: 2 frames + 10 tabs on 32x22 stock need 2 sheets with openings vs 3 without).
-Heavy job (304 parts, 4 sheet types, Quality): 0.75 s with openings, 0.39 s without; saved 7 of 24 sheets.
+Heavy job (304 parts, 4 sheet types, Quality): ~1 s; 2,500 parts ~5 s (was 23 s) thanks to the time budget.
 Windows installer not rebuilt yet (cloud session, no Windows).
 
 ## Next action
@@ -22,11 +32,32 @@ Rebuild the installer on Windows (`.\build.ps1`), install, then a 5-minute smoke
 3. Add small parts, Next to Nest: dashed pockets with parts inside, saving line under Strategy.
 4. Untick "Nest parts inside openings" (Nesting settings): no pockets, sheet count goes back up.
 5. Export full report as PDF: drawings show the pockets, saving line is on page 1.
+6. Import a layout DXF with "Split multi-shape files" on: one row per shape, identical shapes merged with a count.
+7. Enter cut speed / pierce time / $ per hour in Nesting settings: report shows cut path, machine time and Est. cutting.
+   Compare the cut length with your CAM software on one real part.
+8. Report sections > "PDF for": export once each as Internal, Shop and Customer. Shop has no $ anywhere;
+   Customer is one page; in Internal/Shop the sheet index rows and "Back to summary" jump between pages,
+   and the bookmarks panel lists every sheet.
+9. Results > "Quote & company details": fill in your company, add your logo, set a customer, then
+   export the Customer quote: letterhead, quote number, per-part prices that add up to the total.
+10. "Cut list (CSV)": the Save dialog offers a CSV file type (needs this build - the Rust save command
+    changed), and it opens cleanly in Excel.
+11. Shop editing, on a touch screen if the shop has one: tap a part, Move to another sheet, Take off,
+    Put back from "Not on a sheet", Tidy this sheet, Undo, Reset. Close and reopen the project: the edits
+    are still there. Change a part's qty: the edits are cleared and the screen says so.
+12. Export window: press "Export...", try summary off, one sheet left out, Black & white, All portrait,
+    a typed file name; print one page to check the B&W drawing reads well on the shop printer.
+13. Look: light screens with blue buttons; switch Windows to dark mode and the app follows. Narrow the window: the
+    sheet drawings shrink to fit and tapping a part still picks the right one.
+14. Type a note in step 1 Notes (one line mentioning a price), export Shop and Office PDFs: the note is at the top of
+    both, the price line only on the office copy. Export JSON, import it back: the note is still there.
+15. Project header "More" menu: save the project as a file, open it back, back up all projects.
 Then pick from "Next candidates" in `PLAN.md`.
 
 ## Watch out for
 - With openings in play every packing attempt also runs with them empty (best of both wins, and the
-  best empty one is the report's comparison), so nesting takes about 2x. Under a second on big jobs.
+  best empty one is the report's comparison). Search is capped by `SEARCH_BUDGET_MS`; a cut-short
+  search is stated in the report and "Try harder" continues it.
 - Paste rows make a frame only with `rail N` as the 5th value.
 - Older saved parts have no `openings` field — that's fine, they behave exactly as before.
 - Openings are measured at the size the part had when they were set; editing W/H disables them (⚠ in the Fill column) until they are re-fitted with ✎ or the DXF is re-imported.
