@@ -7,7 +7,8 @@ mode, cut path / laser cost, quote incl. cutting, time-budgeted search for big j
 held back, PDF export by audience (internal / shop / customer) with bookmarks and links, a quote
 letterhead with per-part prices, shop sign-off sheets and a CSV cut list, and shop-floor layout
 editing on the Results step (move / take off / put back / tidy / undo, saved with the project).
-Quote tools are hidden by default (Report sections > "Show quoting tools"). See `PLAN.md`.
+Quote tools are hidden by default (Report sections > "Show quoting tools"). "Export..." on Results opens
+one Export window (format, audience, what to include, sheets, paper/orientation/B&W, file name). See `PLAN.md`.
 Shipped "Fill interior openings": DXF import now
 finds usable cut-outs (frame drop-outs) and the nester places smaller parts inside them,
 keeping the part gap from the cut edge. Hand-typed parts can get openings too: the ✎ editor
@@ -16,7 +17,7 @@ A project-level "Nest parts inside openings" switch (Nesting settings) turns it 
 on, the report states the saving vs. leaving openings empty (sheets and $, since cost is
 always whole sheets). Details and checklist in `PLAN.md`.
 
-Verified: `node tools/test_openings.mjs` — 98/98 pass (import, split mode, cut path, quote, export audiences, big jobs, geometry, rotation, stale
+Verified: `node tools/test_openings.mjs` — 112/112 pass (import, split mode, cut path, quote, export audiences, big jobs, geometry, rotation, stale
 openings, PDF export, review regressions, a seeded 40-job random stress test, and the money
 check: 2 frames + 10 tabs on 32x22 stock need 2 sheets with openings vs 3 without).
 Heavy job (304 parts, 4 sheet types, Quality): ~1 s; 2,500 parts ~5 s (was 23 s) thanks to the time budget.
@@ -42,6 +43,8 @@ Rebuild the installer on Windows (`.\build.ps1`), install, then a 5-minute smoke
 11. Shop editing, on a touch screen if the shop has one: tap a part, Move to another sheet, Take off,
     Put back from "Not on a sheet", Tidy this sheet, Undo, Reset. Close and reopen the project: the edits
     are still there. Change a part's qty: the edits are cleared and the screen says so.
+12. Export window: press "Export...", try summary off, one sheet left out, Black & white, All portrait,
+    a typed file name; print one page to check the B&W drawing reads well on the shop printer.
 Then pick from "Next candidates" in `PLAN.md`.
 
 ## Watch out for

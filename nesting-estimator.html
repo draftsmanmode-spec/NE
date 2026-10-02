@@ -102,6 +102,24 @@
   #layoutBar .lb-title{ font-size:16px; font-weight:700; width:100%; max-width:1200px; margin:0 auto 10px auto; }
   #layoutBar .lb-label{ font-size:14px; color:var(--text-dim); margin-right:4px; }
   #layoutBar select{ min-height:48px; font-size:15px; }
+  /* Export window */
+  #exportModal .preview-modal-col{ max-width:900px; }
+  .ex-body{ padding:18px 20px; }
+  .ex-sec{ margin:0 0 18px 0; }
+  .ex-sec h4{ margin:0 0 8px 0; font-family:var(--display); font-size:15px; }
+  .ex-sec .ex-why{ font-size:12.5px; color:var(--text-faint); margin:-4px 0 8px 0; }
+  .ex-opts{ display:flex; flex-wrap:wrap; gap:10px; }
+  button.ex-opt{ min-height:56px; padding:10px 16px; border:2px solid var(--line); border-radius:12px; background:var(--panel);
+    display:flex; flex-direction:column; align-items:flex-start; gap:2px; text-align:left; font-size:15px; }
+  button.ex-opt span{ font-size:12px; font-weight:400; color:var(--text-dim); }
+  button.ex-opt.on{ border-color:var(--purple); background:rgba(124,58,237,.18); }
+  button.ex-opt.tog::before{ content:'\2610'; font-size:18px; margin-bottom:2px; }
+  button.ex-opt.tog.on::before{ content:'\2611'; color:var(--purple); }
+  button.ex-opt:disabled{ opacity:.35; }
+  .ex-row{ display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  .ex-row select, .ex-row input[type=text]{ min-height:48px; font-size:15px; }
+  .ex-summary{ font-size:14.5px; padding:12px 14px; border-radius:10px; background:rgba(124,58,237,.12); border:1px solid var(--purple); }
+  .ex-summary.bad{ border-color:var(--red); background:rgba(228,88,122,.12); }
   #layoutToast{ position:fixed; left:50%; transform:translateX(-50%); bottom:24px; z-index:70; max-width:min(92vw, 720px);
     background:#24183a; border:1px solid var(--purple); border-radius:10px; padding:12px 16px; font-size:14.5px; display:none; box-shadow:0 8px 24px rgba(0,0,0,.5); }
   #layoutToast.bad{ border-color:var(--red); }
@@ -495,8 +513,8 @@
       <span class="title">Print preview</span>
       <div style="display:flex; gap:8px;">
         <button class="ghost small" id="previewCloseBtn">Close</button>
-        <button class="ghost small" id="previewPrintReportBtn">Export full report PDF</button>
-        <button class="primary small" id="previewPrintBtn">Export overview PDF</button>
+        <button class="ghost small" id="previewPrintReportBtn">Export sheets&hellip;</button>
+        <button class="primary small" id="previewPrintBtn">Export this overview&hellip;</button>
       </div>
     </div>
     <div class="pv-controls" id="previewControls">
@@ -614,6 +632,20 @@
       <div class="op-error" id="opError"></div>
       <div class="op-preview" id="opPreview"></div>
     </div>
+  </div>
+</div>
+
+<!-- Export window: what goes in the file, and in what format. -->
+<div class="preview-modal" id="exportModal">
+  <div class="preview-modal-col">
+    <div class="preview-modal-toolbar">
+      <span class="title">Export</span>
+      <div style="display:flex; gap:8px;">
+        <button class="ghost big" id="exCancel">Cancel</button>
+        <button class="primary big" id="exSave">Save</button>
+      </div>
+    </div>
+    <div class="card ex-body" id="exBody"></div>
   </div>
 </div>
 
@@ -3253,7 +3285,12 @@ function sheetAutoOrientation(bin){
 }
 
 function sheetPrintPlan(bin, i){
-  const st = sheetPrintState[i] || {};
+  const st = Object.assign({}, sheetPrintState[i]);
+  // "All portrait / All landscape" from the Export window: only in the file
+  // being made, and never over a sheet's own choice in Preview.
+  if (exportingPdf && !st.orient){
+    if (reportPrefs.orientAll === 'portrait' || reportPrefs.orientAll === 'landscape') st.orient = reportPrefs.orientAll;
+  }
   const auto = sheetAutoOrientation(bin);
   let orient = auto.orient, rotate = auto.rotate, forced = false;
   if (st.orient === 'portrait' || st.orient === 'landscape'){
@@ -3407,12 +3444,21 @@ function quoteMeta(){
 }
 const REPORT_PREFS_KEY = 'nestingEstimatorReportPrefs_v1';
 let reportPrefs = { parts:true, breakdown:true, commonLines:true, remnants:true, sheets:true,
-                    paper:'tabloid', customW:11, customH:17, audience:'shop', quoting:false };
+                    paper:'tabloid', customW:11, customH:17, audience:'shop', quoting:false,
+                    // Export window choices (remembered on this computer)
+                    format:'report', summary:true, notes:true, sheetParts:true, checklist:true,
+                    mono:false, orientAll:'auto',
+                    // What goes in the PDF - separate from what Results shows on screen
+                    pdfParts:true, pdfBreakdown:true, pdfRemnants:true, pdfSheets:true };
 function loadReportPrefs(){
   try{
     const raw = localStorage.getItem(REPORT_PREFS_KEY);
     if (raw) reportPrefs = Object.assign(reportPrefs, JSON.parse(raw));
   }catch(e){}
+  applyReportPrefsToUI();
+}
+function storeReportPrefs(){ try{ localStorage.setItem(REPORT_PREFS_KEY, JSON.stringify(reportPrefs)); }catch(e){} }
+function applyReportPrefsToUI(){
   document.getElementById('secParts').checked = reportPrefs.parts;
   document.getElementById('secBreakdown').checked = reportPrefs.breakdown;
   document.getElementById('secCommonLines').checked = reportPrefs.commonLines;
@@ -3443,7 +3489,8 @@ function refreshPreviewForAudience(){
   }
 }
 function saveReportPrefsFromUI(){
-  reportPrefs = {
+  // Merged, so the Export window's own choices are kept.
+  Object.assign(reportPrefs, {
     parts: document.getElementById('secParts').checked,
     breakdown: document.getElementById('secBreakdown').checked,
     commonLines: document.getElementById('secCommonLines').checked,
@@ -3454,8 +3501,8 @@ function saveReportPrefsFromUI(){
     quoting: document.getElementById('secQuoting').checked,
     customW: parseFloat(document.getElementById('paperCustomW').value) || 11,
     customH: parseFloat(document.getElementById('paperCustomH').value) || 17,
-  };
-  try{ localStorage.setItem(REPORT_PREFS_KEY, JSON.stringify(reportPrefs)); }catch(e){}
+  });
+  storeReportPrefs();
   syncAudienceUI();
   syncPaperUI();
   if (lastRunParams) renderReportBody(lastRunParams.partGap, lastRunParams.borderGap, lastRunParams.quality);
@@ -3781,9 +3828,8 @@ function renderReportBody(partGap, borderGap, quality){
   </div>`;
   const audLabel = (PDF_AUDIENCES[reportPrefs.audience] || PDF_AUDIENCES.shop).label;
   html += `<div class="shop-bar">
-    <button class="big primary" id="btnPrint" title="Change who the PDF is for under Report sections">Export PDF: ${escHtml(audLabel)}</button>
-    <button class="big" id="btnOverview" title="See the pages, pick sheets, then export">Preview pages&hellip;</button>
-    <button class="big" id="btnCutList" title="Every placed part: sheet, position from the sheet's top-left corner, rotation">Cut list (CSV)</button>
+    <button class="big primary" id="btnPrint" title="Choose what goes in the file and the format">&#11015; Export&hellip;</button>
+    <button class="big" id="btnOverview" title="See the one-page overview and set each sheet's orientation">Preview pages&hellip;</button>
     <button class="big" id="btnUndo" ${layoutUndo.length ? '' : 'disabled'} title="Undo the last change to the layout">&#8630; Undo</button>
     <button class="big" id="btnResetLayout" ${s.edited ? '' : 'disabled'} title="Throw away hand edits and go back to the computed layout">Reset layout</button>
   </div>`;
@@ -3891,8 +3937,7 @@ function renderReportBody(partGap, borderGap, quality){
   html += '<div class="print-export-footer" id="exportFooterReport"></div>';
 
   document.getElementById('reportBody').innerHTML = html;
-  document.getElementById('btnPrint').addEventListener('click', (e)=> exportPdf('report', e.currentTarget));
-  document.getElementById('btnCutList').addEventListener('click', (e)=> exportCutListCsv(e.currentTarget));
+  document.getElementById('btnPrint').addEventListener('click', ()=> openExportDialog());
   document.getElementById('btnEditParts').addEventListener('click', ()=> goToStep(1));
   document.getElementById('btnEditSheets').addEventListener('click', ()=> goToStep(2));
   document.getElementById('btnOverview').addEventListener('click', printOverview);
@@ -4259,6 +4304,169 @@ function binLooksValid(b, g){
   return true;
 }
 
+/* ---- the Export window ----
+   One place to choose what goes into the file and in what format. Every
+   choice is remembered on this computer (reportPrefs), so the shop sets it
+   once. Options that don't apply to the chosen format or audience are
+   greyed out with the reason next to them. */
+let exportFileName = '';
+function openExportDialog(format){
+  if (!lastNestResult || !lastNestResult.bins.length){ alert('Run nesting first (step 3).'); return; }
+  if (format) reportPrefs.format = format;
+  exportFileName = '';
+  renderExportDialog();
+  document.getElementById('exportModal').classList.add('open');
+}
+function closeExportDialog(){ document.getElementById('exportModal').classList.remove('open'); }
+function exportDefaultName(){
+  const proj = getProject(currentProjectId);
+  const safe = ((proj && proj.name) || 'nesting').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'nesting';
+  const P = reportPrefs, aud = PDF_AUDIENCES[P.audience] ? P.audience : 'shop';
+  if (P.format === 'csv') return safe + ' - cut list';
+  return safe + ' - ' + PDF_AUDIENCES[aud].file + (P.format === 'overview' && aud !== 'customer' ? ' overview' : '');
+}
+// What the chosen settings will produce, in words; `ok` false = nothing to save.
+function exportPlanText(){
+  const P = reportPrefs, bins = lastNestResult.bins;
+  const picked = bins.filter((b, i)=> sheetPrintPlan(b, i).include).length;
+  const aud = PDF_AUDIENCES[P.audience] ? P.audience : 'shop';
+  if (P.format === 'csv'){
+    if (!picked) return { ok: false, text: 'Pick at least one sheet for the cut list.' };
+    const n = bins.reduce((a, b, i)=> a + (sheetPrintPlan(b, i).include ? b.placements.length : 0), 0);
+    return { ok: true, text: `A spreadsheet with ${n} row${n === 1 ? '' : 's'} (one per part) from ${picked} sheet${picked === 1 ? '' : 's'}.` };
+  }
+  if (aud === 'customer') return { ok: true, text: 'One page: quote total, price lines and the parts list.' };
+  if (P.format === 'overview'){
+    if (!picked && P.summary === false) return { ok: false, text: 'Nothing to put on the page - turn on the summary or pick a sheet.' };
+    return { ok: true, text: `One page: ${P.summary !== false ? 'summary, ' : ''}${picked} sheet${picked === 1 ? '' : 's'} side by side and a parts key.` };
+  }
+  const sheetsOn = P.pdfSheets !== false && picked > 0;
+  if (P.summary === false && !sheetsOn) return { ok: false, text: 'Nothing to export - turn on the summary or the sheet drawings (and pick a sheet).' };
+  const bits = [];
+  if (P.summary !== false) bits.push('a summary page');
+  if (sheetsOn) bits.push(picked + ' sheet page' + (picked === 1 ? '' : 's'));
+  return { ok: true, text: 'About ' + ((P.summary !== false ? 1 : 0) + (sheetsOn ? picked : 0)) + ' page' + (((P.summary !== false ? 1 : 0) + (sheetsOn ? picked : 0)) === 1 ? '' : 's') + ': ' + bits.join(' + ') + '.' };
+}
+function renderExportDialog(){
+  const P = reportPrefs, body = document.getElementById('exBody');
+  const bins = lastNestResult.bins;
+  const aud = PDF_AUDIENCES[P.audience] ? P.audience : 'shop';
+  const isCsv = P.format === 'csv', isOv = P.format === 'overview', isCust = aud === 'customer', isInt = aud === 'internal';
+  const opt = (group, value, label, sub, on, disabled) =>
+    `<button class="ex-opt${on ? ' on' : ''}" data-ex-${group}="${value}" aria-pressed="${on}" ${disabled ? 'disabled' : ''}><b>${label}</b>${sub ? `<span>${sub}</span>` : ''}</button>`;
+  const tog = (key, label, sub, disabled) => {
+    const on = P[key] !== false;
+    return `<button class="ex-opt tog${on && !disabled ? ' on' : ''}" data-ex-tog="${key}" aria-pressed="${on}" ${disabled ? 'disabled' : ''}><b>${label}</b>${sub ? `<span>${sub}</span>` : ''}</button>`;
+  };
+  const summaryOff = P.summary === false, sheetsOff = P.pdfSheets === false, partsUnderOff = P.sheetParts === false;
+  let h = '';
+  h += `<div class="ex-sec"><h4>1. Format</h4><div class="ex-opts">
+    ${opt('format', 'report', 'PDF &middot; one sheet per page', 'Big drawings to cut from', P.format === 'report')}
+    ${opt('format', 'overview', 'PDF &middot; everything on one page', 'Pin-up overview', isOv)}
+    ${opt('format', 'csv', 'Cut list &middot; spreadsheet (CSV)', 'Opens in Excel', isCsv)}
+  </div></div>`;
+  if (!isCsv){
+    h += `<div class="ex-sec"><h4>2. Who is it for?</h4><div class="ex-opts">
+      ${opt('aud', 'shop', 'Shop', 'No prices', aud === 'shop')}
+      ${opt('aud', 'internal', 'Office / internal', 'Costs and efficiency', isInt)}
+      ${P.quoting ? opt('aud', 'customer', 'Customer quote', 'Price page only', isCust) : ''}
+    </div></div>`;
+  }
+  if (!isCsv && !isCust){
+    const why = summaryOff ? 'Needs the summary page' : '';
+    h += `<div class="ex-sec"><h4>3. What to include</h4><div class="ex-opts">
+      ${tog('summary', 'Summary page', 'Sheets, parts, notes on page 1')}
+      ${tog('notes', 'Job notes', why || 'Material to pull, cut order, warnings', summaryOff)}
+      ${!isOv ? tog('pdfParts', 'Parts list', why || 'Every part with its tag', summaryOff) : ''}
+      ${isInt ? tog('pdfBreakdown', 'Material breakdown', why || 'Sheets and use per material', summaryOff) : ''}
+      ${!isOv ? tog('pdfRemnants', 'Leftover pieces', why || 'Offcuts worth keeping', summaryOff) : ''}
+      ${!isOv ? tog('pdfSheets', 'Sheet drawings', 'One page per sheet') : ''}
+      ${!isOv ? tog('sheetParts', 'Parts list under each sheet', sheetsOff ? 'Needs the sheet drawings' : 'What is on that sheet', sheetsOff) : ''}
+      ${!isOv ? tog('checklist', 'Tick boxes &amp; sign-off', (sheetsOff || partsUnderOff) ? 'Needs the parts list under each sheet' : 'Cut by / Date / Checked', sheetsOff || partsUnderOff) : ''}
+    </div></div>`;
+  }
+  if (!isCust){
+    h += `<div class="ex-sec"><h4>${isCsv ? '2' : '4'}. Which sheets</h4><div class="ex-opts">
+      ${bins.map((b, i)=> opt('sheet', i, 'Sheet ' + (i + 1), escHtml(b.sheetType.name) + ' &middot; ' + b.placements.length + ' parts', sheetPrintPlan(b, i).include)).join('')}
+      <button class="ex-opt" data-ex-allsheets="1"><b>All</b></button>
+      <button class="ex-opt" data-ex-allsheets="0"><b>None</b></button>
+    </div></div>`;
+  }
+  if (!isCsv){
+    const paperOpts = Object.entries(PAPER_SIZES).map(([k, v])=> `<option value="${k}" ${P.paper === k ? 'selected' : ''}>${escHtml(v.label)}</option>`).join('')
+      + `<option value="custom" ${P.paper === 'custom' ? 'selected' : ''}>Custom size</option>`;
+    h += `<div class="ex-sec"><h4>${isCust ? '3' : '5'}. Paper</h4><div class="ex-row">
+      <select id="exPaper">${paperOpts}</select>
+      ${P.paper === 'custom' ? `<input type="text" id="exCustomW" value="${P.customW}" style="width:80px"> &times; <input type="text" id="exCustomH" value="${P.customH}" style="width:80px"> in` : ''}
+    </div>`;
+    if (!isCust){
+      h += `<div class="ex-opts" style="margin-top:10px;">
+        ${!isOv ? opt('orient', 'auto', 'Auto turn', 'Each sheet the way it fits best', !P.orientAll || P.orientAll === 'auto') : ''}
+        ${!isOv ? opt('orient', 'portrait', 'All portrait', '', P.orientAll === 'portrait') : ''}
+        ${!isOv ? opt('orient', 'landscape', 'All landscape', '', P.orientAll === 'landscape') : ''}
+        ${opt('mono', '0', 'Colour', '', !P.mono)}
+        ${opt('mono', '1', 'Black &amp; white', 'Saves colour ink', !!P.mono)}
+      </div>`;
+    }
+    h += `</div>`;
+  }
+  const plan = exportPlanText();
+  h += `<div class="ex-sec"><h4>File name</h4><div class="ex-row">
+      <input type="text" id="exName" style="flex:1; min-width:260px" value="${escAttr(exportFileName || exportDefaultName())}">
+      <span style="font-size:15px; color:var(--text-dim);">.${isCsv ? 'csv' : 'pdf'}</span>
+    </div></div>
+    <div class="ex-summary${plan.ok ? '' : ' bad'}" id="exPlan">${escHtml(plan.text)}</div>`;
+  body.innerHTML = h;
+
+  const save = document.getElementById('exSave');
+  save.textContent = isCsv ? 'Save cut list' : 'Save PDF';
+  save.disabled = !plan.ok;
+
+  const changed = ()=>{ storeReportPrefs(); applyReportPrefsToUI(); renderExportDialog(); };
+  body.querySelectorAll('[data-ex-format]').forEach(b=> b.addEventListener('click', ()=>{ P.format = b.dataset.exFormat; exportFileName = ''; changed(); }));
+  body.querySelectorAll('[data-ex-aud]').forEach(b=> b.addEventListener('click', ()=>{ P.audience = b.dataset.exAud; exportFileName = ''; changed(); }));
+  body.querySelectorAll('[data-ex-tog]').forEach(b=> b.addEventListener('click', ()=>{ P[b.dataset.exTog] = P[b.dataset.exTog] === false; changed(); }));
+  body.querySelectorAll('[data-ex-orient]').forEach(b=> b.addEventListener('click', ()=>{ P.orientAll = b.dataset.exOrient; changed(); }));
+  body.querySelectorAll('[data-ex-mono]').forEach(b=> b.addEventListener('click', ()=>{ P.mono = b.dataset.exMono === '1'; changed(); }));
+  body.querySelectorAll('[data-ex-sheet]').forEach(b=> b.addEventListener('click', ()=>{
+    const i = parseInt(b.dataset.exSheet, 10);
+    sheetPrintState[i] = Object.assign({}, sheetPrintState[i], { include: !sheetPrintPlan(bins[i], i).include });
+    renderExportDialog();
+  }));
+  body.querySelectorAll('[data-ex-allsheets]').forEach(b=> b.addEventListener('click', ()=>{
+    bins.forEach((x, i)=>{ sheetPrintState[i] = Object.assign({}, sheetPrintState[i], { include: b.dataset.exAllsheets === '1' }); });
+    renderExportDialog();
+  }));
+  const paper = document.getElementById('exPaper');
+  if (paper) paper.addEventListener('change', ()=>{ P.paper = paper.value; changed(); });
+  ['exCustomW', 'exCustomH'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', ()=>{ const v = parseFloat(el.value); if (v > 0){ P[id === 'exCustomW' ? 'customW' : 'customH'] = v; } changed(); });
+  });
+  document.getElementById('exName').addEventListener('input', e=>{ exportFileName = e.target.value; });
+}
+async function saveFromExportDialog(){
+  const P = reportPrefs, btn = document.getElementById('exSave');
+  if (!exportPlanText().ok) return;
+  const raw = (document.getElementById('exName').value || '').trim();
+  const name = raw.replace(/\.(pdf|csv)$/i, '').replace(/[\\/:*?"<>|]+/g, '-').trim() || exportDefaultName();
+  if (P.format === 'csv') await exportCutListCsv(btn, name);
+  else await exportPdf(P.format === 'overview' ? 'overview' : 'report', btn, name);
+  const plan = document.getElementById('exPlan');
+  if (lastSaveResult){
+    plan.textContent = 'Saved: ' + lastSaveResult;
+    plan.classList.remove('bad');
+    setTimeout(()=>{ closeExportDialog(); layoutToast('Saved: ' + lastSaveResult); }, 900);
+  } else {
+    plan.textContent = 'Not saved - the save was cancelled or failed. Nothing was written.';
+    plan.classList.add('bad');
+  }
+}
+document.getElementById('exCancel').addEventListener('click', closeExportDialog);
+document.getElementById('exSave').addEventListener('click', saveFromExportDialog);
+document.getElementById('exportModal').addEventListener('click', e=>{ if (e.target.id === 'exportModal') closeExportDialog(); });
+document.addEventListener('keydown', e=>{ if (e.key === 'Escape' && document.getElementById('exportModal').classList.contains('open')) closeExportDialog(); });
+
 /* ---- selecting and the button bar ---- */
 function layoutSelect(binIdx, pl){
   const st = currentStrategy();
@@ -4405,11 +4613,11 @@ document.getElementById('paperSizePv').addEventListener('change', ()=>{
   }
 });
 
-document.getElementById('previewPrintReportBtn').addEventListener('click', (e)=> exportPdf('report', e.currentTarget));
+document.getElementById('previewPrintReportBtn').addEventListener('click', ()=>{ document.getElementById('previewModal').classList.remove('open'); openExportDialog('report'); });
 document.getElementById('previewCloseBtn').addEventListener('click', ()=>{
   document.getElementById('previewModal').classList.remove('open');
 });
-document.getElementById('previewPrintBtn').addEventListener('click', (e)=> exportPdf('overview', e.currentTarget));
+document.getElementById('previewPrintBtn').addEventListener('click', ()=>{ document.getElementById('previewModal').classList.remove('open'); openExportDialog('overview'); });
 
 function buildOverviewContent(bins, containerId){
   const container = document.getElementById(containerId);
@@ -4587,11 +4795,11 @@ function drawSheetThumb(canvas, bin){
 
   bin.placements.forEach(p=>{
     const px = p.x*scale, py = p.y*scale, pw = p.w*scale, ph = p.h*scale;
-    ctx.fillStyle = p.color || '#c9ccd1';
+    ctx.fillStyle = drawMono ? '#ececec' : (p.color || '#c9ccd1');
     ctx.globalAlpha = 0.9;
     ctx.fillRect(px, py, pw, ph);
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.strokeStyle = drawMono ? 'rgba(0,0,0,0.8)' : 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 0.5;
     ctx.strokeRect(px+0.25, py+0.25, pw-0.5, ph-0.5);
     drawPlacementOpenings(ctx, p, scale, px, py, 0.5);
@@ -4744,24 +4952,24 @@ function drawSheet(canvas, bin, sheetNumber, eff){
     ctx.rect(0,0,cssW,cssH);
     ctx.rect(bg*scale, bg*scale, (bin.w-2*bg)*scale, (bin.h-2*bg)*scale);
     ctx.clip('evenodd');
-    ctx.strokeStyle = 'rgba(200,70,90,0.30)';
+    ctx.strokeStyle = drawMono ? 'rgba(0,0,0,0.25)' : 'rgba(200,70,90,0.30)';
     ctx.lineWidth = 1;
     for (let d=-cssH; d<cssW; d+=8){ ctx.beginPath(); ctx.moveTo(d,0); ctx.lineTo(d+cssH,cssH); ctx.stroke(); }
     ctx.restore();
   }
 
   // Sheet outline
-  ctx.strokeStyle = '#7c3aed';
+  ctx.strokeStyle = drawMono ? '#000000' : '#7c3aed';
   ctx.lineWidth = 1.5;
   ctx.strokeRect(0.75,0.75,cssW-1.5,cssH-1.5);
 
   bin.placements.forEach(p=>{
     const px = p.x*scale, py = p.y*scale, pw = p.w*scale, ph = p.h*scale;
-    ctx.fillStyle = p.color || '#c9ccd1';
+    ctx.fillStyle = drawMono ? '#ececec' : (p.color || '#c9ccd1');
     ctx.globalAlpha = 0.9;
     ctx.fillRect(px, py, pw, ph);
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = 'rgba(40,40,50,0.75)';
+    ctx.strokeStyle = drawMono ? '#000000' : 'rgba(40,40,50,0.75)';
     ctx.lineWidth = 1;
     ctx.strokeRect(px+0.5, py+0.5, pw-1, ph-1);
     drawPlacementOpenings(ctx, p, scale, px, py, 1);
@@ -4881,6 +5089,8 @@ function drawSheet(canvas, bin, sheetNumber, eff){
 const PDF_EXPORT_DPI = 300;
 const PDF_MAX_CANVAS_SCALE = 7;    // bounds peak memory on very large sheets
 let exportRenderScale = 0;         // 0 = screen DPR; >0 = fixed export multiplier
+let drawMono = false;              // true while exporting in black & white (saves colour ink)
+let exportingPdf = false;          // true while a PDF is being built (export-only page settings apply)
 
 const PDF_INK    = [26, 22, 30];
 const PDF_MUTED  = [108, 104, 120];
@@ -5177,7 +5387,19 @@ async function buildNestingPdf(mode, audienceKey, trace){
   const projName = proj ? proj.name : 'Nesting report';
   const dateStr = new Date().toLocaleDateString();
 
-  const doc = new jsPDF({ unit: 'in', format: [paper.w, paper.h], orientation: 'portrait', compress: true });
+  // What the Export window asked for.
+  const X = reportPrefs;
+  const S = isCust || X.summary !== false;               // summary page(s)
+  const wantSheets = mode === 'report' && !isCust && X.pdfSheets !== false;
+  const showChecklist = !isCust && X.checklist !== false;
+  const showSheetParts = X.sheetParts !== false;
+  drawMono = !!X.mono;
+  exportingPdf = true;
+  // Without a summary the first sheet uses the first page, turned its own way.
+  const firstSheet = bins.findIndex((b, i) => sheetPrintPlan(b, i).include);
+  let firstPageFree = mode === 'report' && !S && wantSheets && firstSheet >= 0;
+  const firstLand = firstPageFree && sheetPrintPlan(bins[firstSheet], firstSheet).orient === 'landscape';
+  const doc = new jsPDF({ unit: 'in', format: [paper.w, paper.h], orientation: firstLand ? 'landscape' : 'portrait', compress: true });
   pdfRegisterFonts(doc);
   if (trace){
     const write = doc.text;
@@ -5210,7 +5432,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
 
   const qm = isCust ? quoteMeta() : null;
   if (isCust) pdfQuoteHeader(doc, ctx, qm, projName);
-  else {
+  else if (S || mode !== 'report') {
   // ---- title -------------------------------------------------------
   pdfText(doc, PDF_TYPE.title, 'display', PDF_INK);
   doc.text(projName, M, ctx.y + pdfLine(PDF_TYPE.title));
@@ -5224,7 +5446,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
   doc.line(M, ctx.y, M + ctx.contentW, ctx.y);
   ctx.y += 0.22;
   }
-  mark('Summary');
+  if (S) mark('Summary');
 
   const included = bins.filter((b, i) => sheetPrintPlan(b, i).include);
   const costs = jobCosts(s, bins), cut = costs.cut;
@@ -5262,10 +5484,10 @@ async function buildNestingPdf(mode, audienceKey, trace){
     if (isInt && costs.subtotal != null) stats.push({ num: pdfMoney(costs.subtotal), lbl: costs.cutting != null ? 'Material + cutting' : 'Material' });
     if (isInt && costs.quote != null) stats.push({ num: pdfMoney(costs.quote), lbl: 'Customer quote' });
   }
-  pdfStatStrip(doc, ctx, stats);
+  if (S) pdfStatStrip(doc, ctx, stats);
 
   // ---- money -------------------------------------------------------------
-  if (isInt && costs.material != null){
+  if (S && isInt && costs.material != null){
     pdfSectionTitle(doc, ctx, 'Costs');
     const rows = usedTypes.map(st => ({
       label: st.name, detail: usage[st.id] + ' sheet' + (usage[st.id] === 1 ? '' : 's') + ' × ' + pdfMoney(st.cost || 0) + '   (' + st.width + '" × ' + st.height + '")',
@@ -5333,14 +5555,14 @@ async function buildNestingPdf(mode, audienceKey, trace){
     }
   }
   if (!isCust && bins.length) notes.push({ text: 'Drawings are proportional references, not to scale - take dimensions from the parts list, not the drawing.', rgb: PDF_MUTED });
-  if (notes.length && !isCust){
+  if (S && X.notes !== false && notes.length && !isCust){
     pdfSectionTitle(doc, ctx, 'Notes for this job');
     pdfBullets(doc, ctx, notes);
   }
   const custNotes = isCust ? notes : null;
 
   // ---- material breakdown (internal) ---------------------------------------
-  if (isInt && reportPrefs.breakdown && usedTypes.length){
+  if (S && isInt && X.pdfBreakdown !== false && usedTypes.length){
     pdfSectionTitle(doc, ctx, 'Material');
     const cols = [{ label: 'Material', key: 'mat', w: 3.4, wrap: true }, { label: 'Sheet size', key: 'size', w: 2, mono: true },
                   { label: 'Sheets', key: 'sheets', w: 1.1, align: 'right', mono: true }, { label: 'Used', key: 'eff', w: 1.2, align: 'right', mono: true }];
@@ -5353,8 +5575,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
 
   // ---- sheet index: every row jumps to its sheet's page ------------------
   const indexRows = [];
-  const wantSheets = mode === 'report' && !isCust && (isShop || reportPrefs.sheets);
-  if (wantSheets && included.length > 1){
+  if (S && wantSheets && included.length > 1){
     pdfSectionTitle(doc, ctx, 'Sheets');
     const cols = [{ label: 'Sheet', key: 'n', w: 0.9, mono: true }, { label: 'Material', key: 'mat', w: 3.6, wrap: true },
                   { label: 'Size', key: 'size', w: 1.9, mono: true }, { label: 'Parts', key: 'parts', w: 0.9, align: 'right', mono: true }];
@@ -5370,7 +5591,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
 
   // ---- parts ---------------------------------------------------------------
   // The one-page overview has its own parts key under the thumbnails.
-  if (isCust || (mode === 'report' && (reportPrefs.parts || isShop))){
+  if (isCust || (S && mode === 'report' && X.pdfParts !== false)){
     pdfSectionTitle(doc, ctx, 'Parts');
     mark('Parts');
     const placedBy = {};
@@ -5406,7 +5627,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
   }
 
   // ---- remnants (where to put the offcuts) -------------------------------
-  if (!isCust && reportPrefs.remnants && mode === 'report'){
+  if (S && !isCust && X.pdfRemnants !== false && mode === 'report'){
     const rem = findRemnants(bins, 6);
     if (rem.length){
       pdfSectionTitle(doc, ctx, 'Reusable remnants');
@@ -5430,7 +5651,8 @@ async function buildNestingPdf(mode, audienceKey, trace){
         const land = plan.orient === 'landscape';
         const pw = land ? paper.h : paper.w;
         const ph = land ? paper.w : paper.h;
-        doc.addPage([paper.w, paper.h], land ? 'landscape' : 'portrait');
+        if (firstPageFree) firstPageFree = false;
+        else doc.addPage([paper.w, paper.h], land ? 'landscape' : 'portrait');
         sheetPages[i] = page();
         if (!sheetsNode) sheetsNode = doc.outline.add(null, 'Sheets', { pageNumber: page() });
         doc.outline.add(sheetsNode, 'Sheet ' + (i + 1) + ' - ' + bin.sheetType.name, { pageNumber: page() });
@@ -5441,11 +5663,13 @@ async function buildNestingPdf(mode, audienceKey, trace){
         let hy = M;
         pdfText(doc, PDF_TYPE.sheetHead, 'display', PDF_INK);
         doc.text('Sheet ' + (i + 1) + ' of ' + bins.length + '  ·  ' + bin.sheetType.name, M, hy + pdfLine(PDF_TYPE.sheetHead));
-        // Every sheet page links back to the summary.
-        pdfText(doc, PDF_TYPE.note, 'body', PDF_PURPLE);
-        const back = 'Back to summary', bw = doc.getTextWidth(back), by = hy + pdfLine(PDF_TYPE.sheetHead) - 0.02;
-        doc.text(back, pw - M - bw, by);
-        doc.link(pw - M - bw, by - pdfLine(PDF_TYPE.note), bw, pdfLine(PDF_TYPE.note) + 0.04, { pageNumber: 1 });
+        // Every sheet page links back to the summary (when there is one).
+        if (S){
+          pdfText(doc, PDF_TYPE.note, 'body', PDF_PURPLE);
+          const back = 'Back to summary', bw = doc.getTextWidth(back), by = hy + pdfLine(PDF_TYPE.sheetHead) - 0.02;
+          doc.text(back, pw - M - bw, by);
+          doc.link(pw - M - bw, by - pdfLine(PDF_TYPE.note), bw, pdfLine(PDF_TYPE.note) + 0.04, { pageNumber: 1 });
+        }
         hy += pdfLine(PDF_TYPE.sheetHead) + 0.06;
         pdfText(doc, PDF_TYPE.sheetMeta, 'mono', PDF_MUTED);
         const nestedHere = countNestedInOpenings([bin]);
@@ -5457,7 +5681,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
 
         // Reserve room under the drawing for this sheet's own parts list,
         // laid out in as many columns as it takes to stay short.
-        const rows = sheetLegendRows(bin);
+        const rows = showSheetParts ? sheetLegendRows(bin) : [];
         const perCol = 9;
         const nCols = Math.max(1, Math.min(3, Math.ceil(rows.length / perCol)));
         const rowsPerCol = Math.ceil(rows.length / nCols);
@@ -5469,7 +5693,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
             + pdfLine(PDF_TYPE.legendTh) + 0.12               // table header + rule
             + rowsPerCol * (pdfLine(PDF_TYPE.legendTd) + 0.07)
             + 0.20                                            // slack above the footer
-            + (isShop ? 0.36 : 0)                             // sign-off line
+            + (showChecklist ? 0.36 : 0)                      // sign-off line
           : 0;
 
         const boxW = pw - 2 * M;
@@ -5505,7 +5729,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
                { label: 'Part', key: 'name', w: 2.6, wrap: true },
                { label: 'Size', key: 'size', w: 1.8, mono: true },
                { label: 'Qty', key: 'qty', w: 0.7, align: 'right', mono: true }]
-                .concat(isShop ? [{ label: 'Cut', key: 'chk', w: 0.5, align: 'right', check: true }] : []),
+                .concat(showChecklist ? [{ label: 'Cut', key: 'chk', w: 0.5, align: 'right', check: true }] : []),
               slice.map(r => ({ tag: '#' + r.tag, name: r.name,
                                 size: r.w + '" × ' + r.h + '"', qty: r.count,
                                 _color: r.color })),
@@ -5513,7 +5737,7 @@ async function buildNestingPdf(mode, audienceKey, trace){
                 th: PDF_TYPE.legendTh, td: PDF_TYPE.legendTd });
             lctx.y = Math.max(lctx.y, sub.y);
           }
-          if (isShop){
+          if (showChecklist){
             // Sign-off line for the person running the sheet.
             const sy = Math.min(lctx.y + 0.10, ph - 0.55 - 0.12);
             pdfText(doc, PDF_TYPE.note, 'body', PDF_MUTED);
@@ -5656,6 +5880,8 @@ async function buildNestingPdf(mode, audienceKey, trace){
   }
 
   pdfStampFooters(doc, (isCust && business.company ? business.company + '   ·   ' + qm.number : projName + '   ·   ' + A.title), dateStr, M);
+  drawMono = false;
+  exportingPdf = false;
   return doc;
 }
 /* Quote letterhead: logo (or company name) on the left, contact block on
@@ -5739,7 +5965,7 @@ function buildCutListCsv(){
   const bins = (lastNestResult && lastNestResult.bins) || [];
   const q = v => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
   const rows = [['Sheet', 'Material', 'Sheet W', 'Sheet H', 'Tag', 'Part', 'W', 'H', 'X from left', 'Y from top', 'Rotated', 'Inside opening of']];
-  bins.forEach((b, i) => b.placements.forEach(p => {
+  bins.forEach((b, i) => sheetPrintPlan(b, i).include && b.placements.forEach(p => {
     const host = b.placements.find(h => h !== p && h.openings && h.openings.length && rectContains(h, p));
     rows.push([i + 1, b.sheetType.name, b.w, b.h, '#' + (p.tag != null ? p.tag : partTagFor(p.defId)), p.name,
                +p.w.toFixed(4), +p.h.toFixed(4), +p.x.toFixed(4), +p.y.toFixed(4), p.rotated ? 'yes' : 'no',
@@ -5747,20 +5973,25 @@ function buildCutListCsv(){
   }));
   return '\ufeff' + rows.map(r => r.map(q).join(',')).join('\r\n') + '\r\n';
 }
-async function exportCutListCsv(btn){
+async function exportCutListCsv(btn, fileBase){
+  lastSaveResult = null;
   if (!lastNestResult || !lastNestResult.bins.length){ alert('Run nesting first (step 3).'); return; }
   const label = btn ? btn.textContent : null;
   try {
     const bytes = new TextEncoder().encode(buildCutListCsv());
     const proj = getProject(currentProjectId);
     const safe = ((proj && proj.name) || 'nesting').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'nesting';
-    const saved = await savePdfBytes(bytes, safe + ' - cut list.csv', { filter: 'CSV file', ext: 'csv', mime: 'text/csv' });
+    const csvName = (fileBase || (safe + ' - cut list')) + '.csv';
+    const saved = await savePdfBytes(bytes, csvName, { filter: 'CSV file', ext: 'csv', mime: 'text/csv' });
+    lastSaveResult = saved ? csvName : null;
     if (btn){ btn.textContent = saved ? 'Saved ✓' : 'Cancelled'; setTimeout(() => { btn.textContent = label; }, 2200); }
   } catch (err){
     alert('Cut list export failed: ' + (err && err.message ? err.message : err));
   }
 }
-async function exportPdf(mode, btn){
+let lastSaveResult = null;   // file name of the last export, or null if cancelled / failed
+async function exportPdf(mode, btn, fileBase){
+  lastSaveResult = null;
   if (pdfExportBusy) return;
   if (!lastNestResult || !lastNestResult.bins.length){
     alert('Run nesting first (step 3) before exporting a PDF.');
@@ -5777,8 +6008,9 @@ async function exportPdf(mode, btn){
     const proj = getProject(currentProjectId);
     const safe = ((proj && proj.name) || 'nesting').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'nesting';
     const kind = PDF_AUDIENCES[audience].file + (mode === 'overview' && audience !== 'customer' ? ' overview' : '');
-    const name = safe + ' - ' + kind + '.pdf';
+    const name = (fileBase || (safe + ' - ' + kind)) + '.pdf';
     const saved = await savePdfBytes(bytes, name);
+    lastSaveResult = saved ? name : null;
     if (btn) btn.textContent = saved ? 'Saved ✓' : 'Cancelled';
     setTimeout(() => { if (btn) btn.textContent = label; }, 2200);
   } catch (err){
@@ -5788,6 +6020,8 @@ async function exportPdf(mode, btn){
   } finally {
     if (btn) btn.disabled = false;
     pdfExportBusy = false;
+    drawMono = false;
+    exportingPdf = false;
   }
 }
 

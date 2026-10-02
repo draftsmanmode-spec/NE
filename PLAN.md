@@ -81,6 +81,16 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] Results opens on the report (no popup), big export buttons at the top, PDF defaults to Shop; quoting tools hidden behind "Show quoting tools"
 - [x] Tests: UI-driven move / take off / put back / tidy / undo / reset, refused moves, persistence, JSON round trip, tampered layout, 150 random edits (98 checks)
 
+## Done — Export window (2026-10-02)
+- [x] "Export..." opens one window: Format (PDF one sheet per page / PDF everything on one page / Cut list CSV), Who it's for (Shop / Office; Customer when quoting is on)
+- [x] What to include: Summary page, Job notes, Parts list, Material breakdown (office), Leftover pieces, Sheet drawings, Parts list under each sheet, Tick boxes & sign-off - dependent options grey out and say why
+- [x] Which sheets (big toggles + All / None), Paper, All portrait / All landscape / Auto turn, Colour / Black & white, editable file name
+- [x] Live line saying what will be saved ("About 4 pages: a summary page + 3 sheet pages"); Save disabled with the reason when there's nothing to export
+- [x] Summary off: the first sheet uses page 1 (turned its own way), no dangling "Back to summary"; cut list follows the sheet picks
+- [x] Choices remembered on this computer (report prefs); Preview's export buttons open the same window
+- [x] PDF include switches (`pdfParts` / `pdfSheets` / `pdfRemnants` / `pdfBreakdown`) are separate from what Results shows; All portrait/landscape applies only to the file; the window says "Saved: name" or "Not saved"
+- [x] Tests drive the window and check the files (pages, contents, orientation, colour-free B&W drawing, file names, remembered choices)
+
 ## Next candidates
 - [ ] Rotate a single part by hand (turn 90 degrees in place when there is room)
 - [ ] Drag a part to a spot on the same sheet (today: tidy re-packs the whole sheet)

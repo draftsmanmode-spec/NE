@@ -907,6 +907,112 @@ check(fuzzEdit.problems.length === 0 && fuzzEdit.snaps.every(c => geometryOk(c.b
   `150 random edits: counts, stock and geometry valid after every one${fuzzEdit.problems.length ? ' - ' + fuzzEdit.problems[0] : ''}`);
 await page.evaluate(() => { document.getElementById('layoutToast').classList.remove('show'); layoutSelect(null, null); });
 
+// ---- the Export window ------------------------------------------------------
+await page.evaluate(() => {
+  parts = [];
+  document.getElementById('bulkPaste').value = 'Gate frame, 40, 30, 2, rail 3\nTab, 6, 5, 16\nGusset, 9, 7, 8\nStrip, 36, 3, 6\nBase plate, 44, 40, 3';
+  document.getElementById('parseBulk').click();
+  sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 185 }];
+  Object.assign(reportPrefs, { format: 'report', audience: 'shop', summary: true, notes: true, pdfParts: true, pdfSheets: true, sheetParts: true, checklist: true, mono: false, orientAll: 'auto' });
+  saveWorkingIntoCurrentProject(); render(); goToStep(3);
+});
+await page.waitForTimeout(400);
+await page.click('#btnPrint');
+const exOpen = await page.evaluate(() => document.getElementById('exportModal').classList.contains('open')
+  && !!document.querySelector('[data-ex-format="report"].on') && !!document.querySelector('[data-ex-aud="shop"].on'));
+check(exOpen, 'Export opens a window: PDF one sheet per page, for the shop');
+const pdfNow = async () => page.evaluate(async () => {
+  const t = []; const d = await buildNestingPdf(reportPrefs.format === 'overview' ? 'overview' : 'report', reportPrefs.audience, t);
+  return { text: t.join(' | '), pages: d.getNumberOfPages(), w: d.internal.pageSize.getWidth(), h: d.internal.pageSize.getHeight() };
+});
+const nSheets = await page.evaluate(() => lastNestResult.bins.length);
+let r0 = await pdfNow();
+check(r0.pages === nSheets + 1 && has(r0.text, 'Notes for this job', 'Parts on this sheet', 'Cut by'), `default: summary + ${nSheets} sheet pages with parts lists and sign-off (${r0.pages} pages)`);
+// Summary off: just the sheets, first page turned to suit the first sheet, no dangling links.
+await page.click('[data-ex-tog="summary"]');
+let r1 = await pdfNow();
+check(r1.pages === nSheets && lacks(r1.text, 'Notes for this job', 'Back to summary') && has(r1.text, 'Sheet 1 of') && r1.w > r1.h,
+  `summary off: only the ${nSheets} sheet pages, first page landscape, no "Back to summary"`);
+check(await page.evaluate(() => document.querySelector('[data-ex-tog="notes"]').disabled && /Needs the summary page/.test(document.querySelector('[data-ex-tog="notes"]').textContent)),
+  'options that need the summary are greyed out and say why');
+// Leave out a sheet.
+await page.click('[data-ex-sheet="1"]');
+let r2 = await pdfNow();
+check(r2.pages === nSheets - 1 && lacks(r2.text, 'Sheet 2 of') && /About 2 pages/.test(await page.textContent('#exPlan')), 'unticking a sheet leaves it out, and the window says how many pages');
+// Parts list under each sheet off: tick boxes go with it.
+await page.click('[data-ex-tog="sheetParts"]');
+let r3 = await pdfNow();
+check(lacks(r3.text, 'Parts on this sheet', 'Cut by') && await page.evaluate(() => document.querySelector('[data-ex-tog="checklist"]').disabled),
+  'parts list under each sheet off: no list, no sign-off (that option greys out)');
+await page.click('[data-ex-tog="sheetParts"]');
+await page.click('[data-ex-tog="checklist"]');
+let r4 = await pdfNow();
+check(has(r4.text, 'Parts on this sheet') && lacks(r4.text, 'Cut by'), 'tick boxes & sign-off can be switched off on their own');
+// All portrait.
+await page.click('[data-ex-orient="portrait"]');
+let r5 = await pdfNow();
+const plans = await page.evaluate(() => { exportingPdf = true; const a = lastNestResult.bins.every((b, i) => sheetPrintPlan(b, i).orient === 'portrait'); exportingPdf = false;
+  const screen = lastNestResult.bins.some((b, i) => sheetPrintPlan(b, i).orient === 'landscape'); return { a, screen }; });
+check(r5.w < r5.h && plans.a && plans.screen, 'All portrait turns every sheet page portrait in the file only (screen cards unchanged)');
+await page.click('[data-ex-orient="auto"]');
+// Black & white: the drawing has no colour in it.
+await page.click('[data-ex-mono="1"]');
+const mono = await page.evaluate(async () => {
+  const bin = lastNestResult.bins[0];
+  const sample = async () => {
+    drawMono = !!reportPrefs.mono;
+    const png = renderSheetPng(bin, { rotate: false }, 1, 0, 4, false);
+    drawMono = false;
+    const img = new Image(); img.src = png.url; await img.decode();
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let coloured = 0;
+    for (let i = 0; i < d.length; i += 4 * 37){ const mx = Math.max(d[i], d[i+1], d[i+2]), mn = Math.min(d[i], d[i+1], d[i+2]); if (mx - mn > 24) coloured++; }
+    return coloured;
+  };
+  const bw = await sample();
+  reportPrefs.mono = false;
+  const colour = await sample();
+  reportPrefs.mono = true;
+  return { bw, colour };
+});
+check(mono.bw === 0 && mono.colour > 0, `black & white drawings carry no colour (${mono.bw} coloured samples vs ${mono.colour} in colour)`);
+await page.click('[data-ex-mono="0"]');
+// Nothing selected: Save is disabled and says why.
+await page.click('[data-ex-allsheets="0"]');
+const nothing = await page.evaluate(() => ({ dis: document.getElementById('exSave').disabled, text: document.getElementById('exPlan').textContent }));
+check(nothing.dis && /Nothing to export/.test(nothing.text), `nothing selected: Save is disabled ("${nothing.text}")`);
+await page.click('[data-ex-allsheets="1"]');
+await page.click('[data-ex-tog="summary"]');
+// Cut list from the same window, only the picked sheets, saved under the typed name.
+await page.click('[data-ex-format="csv"]');
+await page.click('[data-ex-sheet="0"]');
+await page.fill('#exName', 'Monday cut list');
+const csvPicked = new Set(await page.evaluate(() => [...new Set(buildCutListCsv().trim().split('\r\n').slice(1).map(r => r.split(',')[0]))]));
+const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exSave')]);
+check(dl.suggestedFilename() === 'Monday cut list.csv' && !csvPicked.has('1') && csvPicked.size === nSheets - 1,
+  `cut list from the Export window: picked sheets only, saved as "${dl.suggestedFilename()}"`);
+// PDF saved under the typed name.
+await page.click('[data-ex-format="report"]');
+await page.click('[data-ex-allsheets="1"]');
+await page.fill('#exName', 'Job 417 cut sheets.pdf');
+const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#exSave')]);
+await page.waitForFunction(() => /Saved: Job 417/.test(document.getElementById('exPlan').textContent));
+check(dl2.suggestedFilename() === 'Job 417 cut sheets.pdf', `PDF saved under the typed name ("${dl2.suggestedFilename()}"), and the window says so`);
+// Turning sheet drawings off for the PDF leaves the Results screen alone.
+await page.waitForTimeout(1000);
+await page.click('#btnPrint');
+await page.click('[data-ex-tog="pdfSheets"]');
+const screenKept = await page.evaluate(() => { rerenderResults(); return document.querySelectorAll('.sheet-canvas').length === lastNestResult.bins.length; });
+check(screenKept, 'PDF choices never hide anything on the Results screen');
+await page.click('[data-ex-tog="pdfSheets"]');
+// Choices are remembered on this computer.
+const remembered = await page.evaluate(() => { const p = JSON.parse(localStorage.getItem(REPORT_PREFS_KEY)); return p.checklist === false && p.format === 'report'; });
+check(remembered, 'export choices are remembered for next time');
+await page.click('#exCancel');
+await page.evaluate(() => { Object.assign(reportPrefs, { summary: true, notes: true, sheetParts: true, checklist: true, mono: false, orientAll: 'auto', format: 'report', pdfSheets: true, pdfParts: true }); storeReportPrefs(); sheetPrintState = {}; });
+
 // The PDF path draws the same sheets through drawSheet(); make sure it still builds.
 const pdfBytes = await page.evaluate(async () => {
   sheetTypes = [{ id: nextId(), name: '48x96', width: 96, height: 48, qty: null, cost: 100 }];

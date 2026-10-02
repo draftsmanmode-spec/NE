@@ -18,6 +18,7 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
 - Drawing: `drawSheet`, `drawSheetThumb`, `rotatedBinView`; PDF: `buildNestingPdf(mode, audience)` with `PDF_AUDIENCES` (internal / shop / customer)
 - Money: `jobCosts` (material + cutting, markup, all in cents); big jobs: `SEARCH_BUDGET_MS`, oversized parts: `fitsSomeSheet` / `oversizedParts`
 - Split mode: `dxfSplitNested` (containment) with `dxfClusterRuns` (bbox) as fallback; cut path: `dxfCutStats`, `partCut`, `cutTotals`
+- Export window: `openExportDialog` / `renderExportDialog` / `exportPlanText`; choices live in `reportPrefs` (format, audience, summary, notes, pdfParts, pdfSheets, pdfRemnants, pdfBreakdown, sheetParts, checklist, mono, orientAll — PDF-only, never what Results shows) and `buildNestingPdf` reads them
 - Shop editing: `LAYOUT EDITING` section — `layoutMove` / `layoutTakeOff` / `layoutPutBack` / `layoutTidy` / `layoutUndoLast` / `layoutReset`; results drawn only by `rerenderResults`
 
 ## Rules that matter
