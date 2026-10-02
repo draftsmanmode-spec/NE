@@ -1,4 +1,4 @@
-# Handoff — 2026-10-01
+# Handoff — 2026-10-02
 
 ## State
 Openings work merged to `main` (draftsmanmode-spec/NE#1). Follow-up on branch
@@ -8,7 +8,9 @@ held back, PDF export by audience (internal / shop / customer) with bookmarks an
 letterhead with per-part prices, shop sign-off sheets and a CSV cut list, and shop-floor layout
 editing on the Results step (move / take off / put back / tidy / undo, saved with the project).
 Quote tools are hidden by default (Report sections > "Show quoting tools"). "Export..." on Results opens
-one Export window (format, audience, what to include, sheets, paper/orientation/B&W, file name). See `PLAN.md`.
+one Export window (format, audience, what to include, sheets, paper/orientation/B&W, file name). Latest round: an
+Apple-style look (light, one blue accent, follows Windows dark mode) and a whole-app audit with ~25 fixes (stale results
+between projects, notes in PDFs/backups, stricter paste and inputs, Esc on every window, remembered strategy). See `PLAN.md`.
 Shipped "Fill interior openings": DXF import now
 finds usable cut-outs (frame drop-outs) and the nester places smaller parts inside them,
 keeping the part gap from the cut edge. Hand-typed parts can get openings too: the ✎ editor
@@ -17,7 +19,7 @@ A project-level "Nest parts inside openings" switch (Nesting settings) turns it 
 on, the report states the saving vs. leaving openings empty (sheets and $, since cost is
 always whole sheets). Details and checklist in `PLAN.md`.
 
-Verified: `node tools/test_openings.mjs` — 112/112 pass (import, split mode, cut path, quote, export audiences, big jobs, geometry, rotation, stale
+Verified: `node tools/test_openings.mjs` — 119/119 pass (import, split mode, cut path, quote, export audiences, big jobs, geometry, rotation, stale
 openings, PDF export, review regressions, a seeded 40-job random stress test, and the money
 check: 2 frames + 10 tabs on 32x22 stock need 2 sheets with openings vs 3 without).
 Heavy job (304 parts, 4 sheet types, Quality): ~1 s; 2,500 parts ~5 s (was 23 s) thanks to the time budget.
@@ -45,6 +47,10 @@ Rebuild the installer on Windows (`.\build.ps1`), install, then a 5-minute smoke
     are still there. Change a part's qty: the edits are cleared and the screen says so.
 12. Export window: press "Export...", try summary off, one sheet left out, Black & white, All portrait,
     a typed file name; print one page to check the B&W drawing reads well on the shop printer.
+13. Look: light screens with blue buttons; switch Windows to dark mode and the app follows. Narrow the window: the
+    sheet drawings shrink to fit and tapping a part still picks the right one.
+14. Type a note in step 1 Notes (one line with a $ in it), export Shop and Office PDFs: the note is at the top of both,
+    the $ line only on the office copy. Export JSON, import it back: the note is still there.
 Then pick from "Next candidates" in `PLAN.md`.
 
 ## Watch out for

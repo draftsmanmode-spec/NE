@@ -38,6 +38,10 @@ Personal shop tool, Windows, Tauri v2 shell around a single HTML file.
   placements are made only by `makePlacement()`. Saved edits (`proj.editedLayout`) are trusted only if the
   job signature matches, every part is accounted for, and `binLooksValid` passes.
 - The shop uses this: big buttons, plain words, no jargon; quoting tools stay behind `reportPrefs.quoting`.
+- Look: colours only via the `:root` tokens (light) and their `prefers-color-scheme: dark` overrides; `--purple` is the
+  one (blue) accent, green/red/amber mean good/problem/heads-up. Sheet drawings and PDF pages stay white paper.
+- Results are dropped by `forgetResults()` on project switch / Clear / Home; display-only changes redraw via `refreshReportIfShown()`.
+- Project notes print on office + shop PDFs via `projectNoteBullets` (lines with `$` never on the shop copy); user text in PDFs goes through `pdfPlain`.
 - No bundler, no npm deps in the app. Keep it one file that works from `file://` and offline.
 - Saved projects live in `localStorage`; new part fields must survive `sanitizeImportedPart`.
 

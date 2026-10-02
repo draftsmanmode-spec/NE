@@ -91,9 +91,24 @@ drop-out should carry smaller parts instead of being scrap.
 - [x] PDF include switches (`pdfParts` / `pdfSheets` / `pdfRemnants` / `pdfBreakdown`) are separate from what Results shows; All portrait/landscape applies only to the file; the window says "Saved: name" or "Not saved"
 - [x] Tests drive the window and check the files (pages, contents, orientation, colour-free B&W drawing, file names, remembered choices)
 
+## Done — Whole-app audit + Apple-style look (2026-10-02)
+- [x] Look: light grey page, white rounded cards, one blue accent, segmented step control with green ticks, plain larger headings, tabular numbers (no typewriter font on screen), translucent header/bottom bar, dark pill notices; follows the computer's dark mode automatically
+- [x] Drawings and PDFs use the same blue accent; the selected part is outlined in blue; drawings shrink to fit narrow screens (taps still land on the right part)
+- [x] Results are dropped on project switch / Clear / example data / Home: no report (or move bar) from another job, no crash after deleting a sheet type
+- [x] Project notes: kept in Export JSON and backups, printed at the top of the office and shop PDFs (lines with a $ stay off the shop copy)
+- [x] Import: numbers written as text accepted; non-project files refused with a plain message
+- [x] Inputs: negative gaps nest as 0, negative sheet cost not kept, qty boxes show what was saved, live part count; paste rows read 10 1/2 / 3/4 / 8-1/4, keep qty 0, leave unreadable lines in the box with the reason
+- [x] Windows: Esc closes DXF / openings / preview, click outside closes preview, Enter in the export file name saves, DXF window starts clean
+- [x] A strategy picked with "Use this" stays picked (saved per project); Tidy says when nothing moved; markup + on-screen quote only with quoting tools on
+- [x] Calculator: recalled price shows a result; new projects pick their first sheet; openings editor "+ Add opening" lands somewhere free; custom paper 5"-60"
+- [x] Tests: 119 checks (stale results, paste, gaps, notes in PDFs, import, picked strategy, openings editor, Esc)
+
 ## Next candidates
 - [ ] Rotate a single part by hand (turn 90 degrees in place when there is room)
 - [ ] Drag a part to a spot on the same sheet (today: tidy re-packs the whole sheet)
 - [ ] Common-line cuts could subtract shared edges from the cut path
 - [ ] Optionally list a frame's leftover drop-out as a remnant separately from sheet-edge remnants
 - [ ] Identical shapes drawn rotated 90 deg in one file are not merged yet (only same orientation)
+- [ ] Leftover piece "+ Add as sheet stock" adds this job's own offcut to this project (it is nested onto next run) - maybe offer it to other projects only
+- [ ] Stock-out parts in "Not on a sheet" offer Put back buttons that usually can't succeed (says why when pressed)
+- [ ] DXF review: editing W/H marks openings stale with no ✎ to re-fit there (re-fit from the parts list)
